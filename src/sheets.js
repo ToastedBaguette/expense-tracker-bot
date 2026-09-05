@@ -87,14 +87,13 @@ export async function getAvailableSheetTitles(sheets) {
     lastCacheTime = now;
     return cachedSheetTitles;
   } catch (err) {
-    console.warn("Error fetching sheet titles from Google Sheets:", err.message);
+    console.warn("Error fetching sheet titles:", err.message);
     return cachedSheetTitles || ["September 2026", "Aug 2026"];
   }
 }
 
 /**
  * Dynamically resolves the actual sheet tab name that exists in the spreadsheet
- * (e.g. "Aug 2026" instead of failing on "August 2026")
  */
 export async function resolveSheetName(dateStr, sheets) {
   const titles = await getAvailableSheetTitles(sheets);
@@ -125,7 +124,6 @@ export async function resolveSheetName(dateStr, sheets) {
 
     const aliases = monthAliases[mCode] || [mCode];
 
-    // Try finding a sheet matching both month alias and year
     const match = titles.find((t) => {
       const lower = t.toLowerCase();
       const hasMonth = aliases.some((a) => lower.includes(a));
@@ -135,7 +133,6 @@ export async function resolveSheetName(dateStr, sheets) {
 
     if (match) return match;
 
-    // Fallback: match month only
     const monthMatch = titles.find((t) => {
       const lower = t.toLowerCase();
       return aliases.some((a) => lower.includes(a));
@@ -144,48 +141,63 @@ export async function resolveSheetName(dateStr, sheets) {
     if (monthMatch) return monthMatch;
   }
 
-  // Default to the first sheet (newest month, e.g. September 2026)
   return titles[0] || "September 2026";
 }
 
 /**
- * Appends an expense row to the Google Sheet
+ * Appends multiple expenses at once (batched per target sheet)
  */
-export async function appendExpense(expense) {
+export async function appendExpenses(expenses) {
+  if (!Array.isArray(expenses) || expenses.length === 0) {
+    throw new Error("No expenses provided to append");
+  }
+
   const sheets = await getSheetsClient();
-  const sheetName = await resolveSheetName(expense.date, sheets);
 
-  // Row columns: [Date, Category, Description, Amount, Source] -> Columns B to F
-  const values = [
-    [
-      expense.date,
-      expense.category,
-      expense.description,
-      expense.amount,
-      expense.source,
-    ],
-  ];
+  // Group expenses by resolved sheet name
+  const sheetGroups = {};
+  for (const exp of expenses) {
+    const sheetName = await resolveSheetName(exp.date, sheets);
+    if (!sheetGroups[sheetName]) {
+      sheetGroups[sheetName] = [];
+    }
+    sheetGroups[sheetName].push([
+      exp.date,
+      exp.category,
+      exp.description,
+      exp.amount,
+      exp.source,
+    ]);
+  }
 
-  const range = `'${sheetName}'!B:F`;
+  let lastSheetName = null;
+  for (const [sheetName, rows] of Object.entries(sheetGroups)) {
+    lastSheetName = sheetName;
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `'${sheetName}'!B:F`,
+      valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: {
+        values: rows,
+      },
+    });
+  }
 
-  const appendRes = await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range,
-    valueInputOption: "USER_ENTERED",
-    insertDataOption: "INSERT_ROWS",
-    requestBody: {
-      values,
-    },
-  });
-
-  // Fetch updated summary
-  const summary = await getMonthlySummary(sheetName);
+  const summary = await getMonthlySummary(lastSheetName);
 
   return {
-    sheetName,
-    updatedRange: appendRes.data.updates?.updatedRange,
+    sheetName: lastSheetName,
+    count: expenses.length,
     summary,
   };
+}
+
+/**
+ * Backward compatibility wrapper for single expense
+ */
+export async function appendExpense(expense) {
+  return await appendExpenses([expense]);
 }
 
 /**

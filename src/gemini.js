@@ -5,50 +5,58 @@ dotenv.config();
 
 const apiKey = process.env.GEMINI_API_KEY;
 if (!apiKey) {
-  console.warn("⚠️ Warning: GEMINI_API_KEY is not set in .env!");
+  console.warn("Warning: GEMINI_API_KEY is not set in .env!");
 }
 
 const ai = new GoogleGenAI({ apiKey });
 
-// Candidate models in order of priority (most stable & fastest first)
+// Candidate models in order of priority (fastest & most stable first)
 const CANDIDATE_MODELS = [
   process.env.GEMINI_MODEL || "gemini-3.5-flash",
   "gemini-3.6-flash",
   "gemini-flash-latest",
 ];
 
-const EXPENSE_SCHEMA = {
+const EXPENSE_ITEM_SCHEMA = {
   type: Type.OBJECT,
   properties: {
-    isExpense: {
-      type: Type.BOOLEAN,
-      description: "True if the text or image represents an expense or purchase transaction.",
-    },
     date: {
       type: Type.STRING,
-      description: "Transaction date formatted as 'D-MMM-YYYY', e.g., '5-Sep-2026'. Default to current date if not specified.",
+      description: "Transaction date formatted as 'D-MMM-YYYY', e.g. '5-Sep-2026'.",
     },
     category: {
       type: Type.STRING,
       enum: ["Food", "Living", "Invest", "Entertainment", "Other"],
-      description: "The expense category.",
+      description: "Category of the expense.",
     },
     description: {
       type: Type.STRING,
-      description: "Short clean description or merchant name (e.g. 'Warteg', 'Kopi Kenangan', 'Laundry', 'Kost').",
+      description: "Clean description or merchant name (e.g. 'Warteg', 'Kopi Kenangan', 'Bensin', 'Kost').",
     },
     amount: {
       type: Type.NUMBER,
-      description: "Total transaction amount in IDR Rupiah as a positive integer (e.g. 35000).",
+      description: "Transaction amount in IDR as positive number (e.g. 25000).",
     },
     source: {
       type: Type.STRING,
       enum: ["BCA", "Seabank", "Grab", "Superbank", "Gopay", "OVO", "Other"],
-      description: "Payment source or bank account used.",
+      description: "Payment source used.",
     },
-    note: {
-      type: Type.STRING,
-      description: "Any extra notes or summary of the receipt.",
+  },
+  required: ["category", "description", "amount", "source"],
+};
+
+const MULTI_EXPENSE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    isExpense: {
+      type: Type.BOOLEAN,
+      description: "True if the text or image contains one or more expense transactions.",
+    },
+    expenses: {
+      type: Type.ARRAY,
+      description: "List of all expense transactions identified in the image or message.",
+      items: EXPENSE_ITEM_SCHEMA,
     },
   },
   required: ["isExpense"],
@@ -57,7 +65,7 @@ const EXPENSE_SCHEMA = {
 /**
  * Formats current date into "D-MMM-YYYY" e.g. "5-Sep-2026"
  */
-function getTodayDateFormatted() {
+export function getTodayDateFormatted() {
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const now = new Date();
   const d = now.getDate();
@@ -69,7 +77,7 @@ function getTodayDateFormatted() {
 /**
  * Helper to execute Gemini requests with automatic fallback across models
  */
-async function generateWithFallback(contents, schema = EXPENSE_SCHEMA) {
+async function generateWithFallback(contents, schema = MULTI_EXPENSE_SCHEMA) {
   let lastError = null;
 
   for (const model of CANDIDATE_MODELS) {
@@ -98,14 +106,12 @@ async function generateWithFallback(contents, schema = EXPENSE_SCHEMA) {
         errMsg.includes("RESOURCE_EXHAUSTED");
 
       if (isTransient) {
-        console.warn(`⚠️ Model ${model} is experiencing high load/unavailable. Trying next model...`);
-        // Short backoff before next model
+        console.warn(`Model ${model} unavailable/busy. Trying fallback...`);
         await new Promise((r) => setTimeout(r, 800));
         continue;
       }
 
-      // If it's another error, try fallback anyway
-      console.warn(`⚠️ Model ${model} failed (${err.message}). Trying fallback...`);
+      console.warn(`Model ${model} failed (${err.message}). Trying fallback...`);
     }
   }
 
@@ -113,17 +119,23 @@ async function generateWithFallback(contents, schema = EXPENSE_SCHEMA) {
 }
 
 /**
- * Analyzes an image (screenshot of receipt/banking app) and extracts expense data
+ * Analyzes an image (screenshot of single receipt, bank statement, or transaction history)
+ * Supports multiple transactions in a single image.
  */
 export async function parseExpenseFromImage(imageBuffer, mimeType = "image/jpeg", userCaption = "") {
   try {
     const todayStr = getTodayDateFormatted();
-    const prompt = `You are a financial receipt OCR assistant. Analyze this Indonesian payment receipt or banking app screenshot (e.g. BCA, Seabank, GoPay, Grab, QRIS, Livin, OVO, ShopeePay, Indomaret).
-Extract:
-- Date: Format as D-MMM-YYYY (e.g. 5-Sep-2026). If year/date is missing or ambiguous, use today's date: ${todayStr}.
-- Category: Pick ONE from: Food, Living, Invest, Entertainment, Other. (Meals/coffee/snacks -> Food; Utilities/bills/kost/pulsa -> Living; Movies/games/aquarium -> Entertainment; Family/friends/donations/random -> Other).
-- Description: Clean merchant name or transaction purpose (e.g. "Kopi Kenangan", "Warteg", "Makan Fmart", "Kost", "Laundry").
-- Amount: Positive integer in IDR (e.g. 25000).
+    const prompt = `You are a financial receipt and bank mutation OCR assistant.
+Analyze this Indonesian payment receipt, banking app screenshot, or mutation history (e.g. BCA, Seabank, GoPay, Grab, QRIS, Livin, OVO, ShopeePay, Indomaret).
+
+CRITICAL INSTRUCTIONS:
+- The image may contain ONE transaction or MULTIPLE transactions (e.g. a bank mutation list or multiple purchases).
+- Extract EVERY valid expense transaction into the 'expenses' array.
+- For bank mutations, only extract debited expenses/transfers out, ignore incoming transfers/top-ups unless user indicates otherwise.
+- Date: Format as D-MMM-YYYY (e.g. 5-Sep-2026). If year or date is missing, use today: ${todayStr}.
+- Category: Pick ONE from: Food, Living, Invest, Entertainment, Other.
+- Description: Clean short merchant name or purpose.
+- Amount: Positive integer in IDR.
 - Source: Pick ONE from: BCA, Seabank, Grab, Superbank, Gopay, OVO, Other.
 ${userCaption ? `User extra caption: "${userCaption}"` : ""}`;
 
@@ -144,9 +156,13 @@ ${userCaption ? `User extra caption: "${userCaption}"` : ""}`;
 
     const result = await generateWithFallback(contents);
 
-    if (result.isExpense && !result.date) {
-      result.date = todayStr;
+    if (result.isExpense && Array.isArray(result.expenses)) {
+      result.expenses = result.expenses.map((item) => ({
+        ...item,
+        date: item.date || todayStr,
+      }));
     }
+
     return result;
   } catch (error) {
     console.error("Gemini Vision OCR Error:", error);
@@ -155,32 +171,49 @@ ${userCaption ? `User extra caption: "${userCaption}"` : ""}`;
 }
 
 /**
- * Parses natural language text (e.g. "makan siang warteg 18rb seabank")
+ * Parses natural language text (single or multiple lines/transactions)
+ * e.g.
+ * "makan warteg 18rb seabank, beli pulsa 50k grab"
+ * or multi-line:
+ * "1. Makan siang 25k bca
+ *  2. Kopi 18k seabank
+ *  3. Bensin 30k bca"
  */
 export async function parseExpenseFromText(text) {
   try {
     const todayStr = getTodayDateFormatted();
     const prompt = `You are an expense parser for personal finance.
-User message: "${text}"
+User message:
+"""
+${text}
+"""
 Current reference date: ${todayStr}.
 
-Determine if this message represents an expense entry or a request to log an expense.
-If yes, extract:
-- isExpense: true
-- date: formatted as D-MMM-YYYY (e.g. ${todayStr})
-- category: Food, Living, Invest, Entertainment, or Other
-- description: short clean description (e.g. "Warteg", "Kopi", "Beli Pulsa")
-- amount: integer in IDR (e.g. 18000 for "18rb" or "18k")
-- source: BCA, Seabank, Grab, Superbank, Gopay, OVO, or Other (default to "BCA" if unspecified)
-
-If the message is NOT an expense (e.g. user asking a question, greeting, or chatting), set isExpense: false.`;
+CRITICAL INSTRUCTIONS:
+- The user may send ONE or MULTIPLE expenses in a single message (comma-separated, numbered list, or multi-line).
+- Extract ALL distinct expense transactions into the 'expenses' array.
+- If the message is an expense, set isExpense: true.
+- If the message is just chatting, asking a question, or greeting, set isExpense: false and empty expenses array.
+- Each item must have:
+  - date: D-MMM-YYYY (default: ${todayStr})
+  - category: Food, Living, Invest, Entertainment, or Other
+  - description: Clean, concise description
+  - amount: Positive integer in IDR (e.g. "18rb" -> 18000, "50k" -> 50000)
+  - source: BCA, Seabank, Grab, Superbank, Gopay, OVO, or Other (default: "BCA")`;
 
     const contents = [{ role: "user", parts: [{ text: prompt }] }];
-    return await generateWithFallback(contents);
+    const result = await generateWithFallback(contents);
+
+    if (result.isExpense && Array.isArray(result.expenses)) {
+      result.expenses = result.expenses.map((item) => ({
+        ...item,
+        date: item.date || todayStr,
+      }));
+    }
+
+    return result;
   } catch (error) {
     console.error("Gemini NLP Text Parser Error:", error);
     throw error;
   }
 }
-
-
