@@ -9,7 +9,13 @@ if (!apiKey) {
 }
 
 const ai = new GoogleGenAI({ apiKey });
-const MODEL_NAME = process.env.GEMINI_MODEL || "gemini-3.6-flash";
+
+// Candidate models in order of priority (most stable & fastest first)
+const CANDIDATE_MODELS = [
+  process.env.GEMINI_MODEL || "gemini-3.5-flash",
+  "gemini-3.6-flash",
+  "gemini-flash-latest",
+];
 
 const EXPENSE_SCHEMA = {
   type: Type.OBJECT,
@@ -61,6 +67,52 @@ function getTodayDateFormatted() {
 }
 
 /**
+ * Helper to execute Gemini requests with automatic fallback across models
+ */
+async function generateWithFallback(contents, schema = EXPENSE_SCHEMA) {
+  let lastError = null;
+
+  for (const model of CANDIDATE_MODELS) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: schema,
+        },
+      });
+
+      const text = response.text?.trim();
+      if (!text) throw new Error("Empty response received from Gemini");
+
+      return JSON.parse(text);
+    } catch (err) {
+      lastError = err;
+      const errMsg = err.message || "";
+      const isTransient =
+        errMsg.includes("503") ||
+        errMsg.includes("429") ||
+        errMsg.includes("UNAVAILABLE") ||
+        errMsg.includes("high demand") ||
+        errMsg.includes("RESOURCE_EXHAUSTED");
+
+      if (isTransient) {
+        console.warn(`⚠️ Model ${model} is experiencing high load/unavailable. Trying next model...`);
+        // Short backoff before next model
+        await new Promise((r) => setTimeout(r, 800));
+        continue;
+      }
+
+      // If it's another error, try fallback anyway
+      console.warn(`⚠️ Model ${model} failed (${err.message}). Trying fallback...`);
+    }
+  }
+
+  throw lastError;
+}
+
+/**
  * Analyzes an image (screenshot of receipt/banking app) and extracts expense data
  */
 export async function parseExpenseFromImage(imageBuffer, mimeType = "image/jpeg", userCaption = "") {
@@ -75,29 +127,23 @@ Extract:
 - Source: Pick ONE from: BCA, Seabank, Grab, Superbank, Gopay, OVO, Other.
 ${userCaption ? `User extra caption: "${userCaption}"` : ""}`;
 
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: [
-        {
-          role: "user",
-          parts: [
-            {
-              inlineData: {
-                data: imageBuffer.toString("base64"),
-                mimeType: mimeType,
-              },
+    const contents = [
+      {
+        role: "user",
+        parts: [
+          {
+            inlineData: {
+              data: imageBuffer.toString("base64"),
+              mimeType: mimeType,
             },
-            { text: prompt },
-          ],
-        },
-      ],
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: EXPENSE_SCHEMA,
+          },
+          { text: prompt },
+        ],
       },
-    });
+    ];
 
-    const result = JSON.parse(response.text.trim());
+    const result = await generateWithFallback(contents);
+
     if (result.isExpense && !result.date) {
       result.date = todayStr;
     }
@@ -129,18 +175,12 @@ If yes, extract:
 
 If the message is NOT an expense (e.g. user asking a question, greeting, or chatting), set isExpense: false.`;
 
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: EXPENSE_SCHEMA,
-      },
-    });
-
-    return JSON.parse(response.text.trim());
+    const contents = [{ role: "user", parts: [{ text: prompt }] }];
+    return await generateWithFallback(contents);
   } catch (error) {
     console.error("Gemini NLP Text Parser Error:", error);
     throw error;
   }
 }
+
+
