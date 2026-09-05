@@ -1,0 +1,20 @@
+﻿# Dependencies
+node_modules/
+
+# WhatsApp session data (contains sensitive auth keys)
+auth_info_baileys/
+auth_info/
+*.session
+
+# Secrets and environment files
+.env
+.env.local
+service_account.json
+credentials.json
+token.json
+
+# Logs & temp files
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
