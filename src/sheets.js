@@ -7,10 +7,13 @@ dotenv.config();
 
 const spreadsheetId = process.env.SPREADSHEET_ID;
 
+let cachedSheetTitles = null;
+let lastCacheTime = 0;
+
 /**
  * Initializes Google Sheets API client
  */
-async function getSheetsClient() {
+export async function getSheetsClient() {
   let auth;
 
   // 1. Check for Service Account credentials
@@ -67,40 +70,82 @@ async function getSheetsClient() {
 }
 
 /**
- * Derives sheet tab name from date (e.g. "5-Sep-2026" -> "September 2026")
+ * Retrieves the available sheet tab titles from Google Sheets
  */
-export function getSheetNameFromDate(dateStr) {
-  const monthMap = {
-    Jan: "January",
-    Feb: "February",
-    Mar: "March",
-    Apr: "April",
-    May: "May",
-    Jun: "June",
-    Jul: "July",
-    Aug: "August",
-    Sep: "September",
-    Oct: "October",
-    Nov: "November",
-    Dec: "December",
-  };
-
-  if (dateStr) {
-    const parts = dateStr.split("-");
-    if (parts.length === 3) {
-      const mCode = parts[1];
-      const year = parts[2];
-      const mFull = monthMap[mCode] || mCode;
-      return `${mFull} ${year}`;
-    }
+export async function getAvailableSheetTitles(sheets) {
+  const now = Date.now();
+  if (cachedSheetTitles && now - lastCacheTime < 15 * 60 * 1000) {
+    return cachedSheetTitles;
   }
 
-  const now = new Date();
-  const months = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-  ];
-  return `${months[now.getMonth()]} ${now.getFullYear()}`;
+  try {
+    const meta = await sheets.spreadsheets.get({
+      spreadsheetId,
+      fields: "sheets.properties.title",
+    });
+    cachedSheetTitles = meta.data.sheets.map((s) => s.properties.title);
+    lastCacheTime = now;
+    return cachedSheetTitles;
+  } catch (err) {
+    console.warn("Error fetching sheet titles from Google Sheets:", err.message);
+    return cachedSheetTitles || ["September 2026", "Aug 2026"];
+  }
+}
+
+/**
+ * Dynamically resolves the actual sheet tab name that exists in the spreadsheet
+ * (e.g. "Aug 2026" instead of failing on "August 2026")
+ */
+export async function resolveSheetName(dateStr, sheets) {
+  const titles = await getAvailableSheetTitles(sheets);
+
+  if (!dateStr) {
+    return titles[0] || "September 2026";
+  }
+
+  const parts = dateStr.split("-");
+  if (parts.length >= 3) {
+    const mCode = parts[1].toLowerCase();
+    const year = parts[2];
+
+    const monthAliases = {
+      jan: ["jan", "january", "januari"],
+      feb: ["feb", "february", "februari"],
+      mar: ["mar", "march", "maret"],
+      apr: ["apr", "april"],
+      may: ["may", "mei"],
+      jun: ["jun", "june", "juni"],
+      jul: ["jul", "july", "juli"],
+      aug: ["aug", "august", "agustus"],
+      sep: ["sep", "september"],
+      oct: ["oct", "october", "oktober"],
+      nov: ["nov", "november"],
+      dec: ["dec", "december", "desember"],
+    };
+
+    const aliases = monthAliases[mCode] || [mCode];
+
+    // Try finding a sheet matching both month alias and year
+    const match = titles.find((t) => {
+      const lower = t.toLowerCase();
+      const hasMonth = aliases.some((a) => lower.includes(a));
+      const hasYear = lower.includes(year);
+      return hasMonth && hasYear;
+    });
+
+    if (match) return match;
+
+    // Fallback: match month only
+    const monthMatch = titles.find((t) => {
+      const lower = t.toLowerCase();
+      return aliases.some((a) => lower.includes(a));
+    });
+
+    if (monthMatch) return monthMatch;
+  }
+
+  // Default to the first sheet (newest month, e.g. September 2026)
+  return titles[0] || "September 2026";
 }
 
 /**
@@ -108,7 +153,7 @@ export function getSheetNameFromDate(dateStr) {
  */
 export async function appendExpense(expense) {
   const sheets = await getSheetsClient();
-  const sheetName = getSheetNameFromDate(expense.date);
+  const sheetName = await resolveSheetName(expense.date, sheets);
 
   // Row columns: [Date, Category, Description, Amount, Source] -> Columns B to F
   const values = [
@@ -147,18 +192,18 @@ export async function appendExpense(expense) {
  * Fetches the budget summary and breakdowns for a given month
  */
 export async function getMonthlySummary(sheetName = null) {
-  if (!sheetName) {
-    sheetName = getSheetNameFromDate();
-  }
-
   const sheets = await getSheetsClient();
+
+  if (!sheetName) {
+    sheetName = await resolveSheetName(null, sheets);
+  }
 
   try {
     const res = await sheets.spreadsheets.values.batchGet({
       spreadsheetId,
       ranges: [
-        `'${sheetName}'!K3:M3`, // Income, Total Expenses, Remaining Budget
-        `'${sheetName}'!K6:L10`, // Category totals
+        `'${sheetName}'!K3:M3`,   // Income, Total Expenses, Remaining Budget
+        `'${sheetName}'!K6:L10`,  // Category totals
         `'${sheetName}'!K13:L17`, // Source totals
       ],
       valueRenderOption: "FORMATTED_VALUE",
