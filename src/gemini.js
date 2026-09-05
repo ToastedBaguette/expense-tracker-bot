@@ -9,6 +9,7 @@ if (!apiKey) {
 }
 
 const ai = new GoogleGenAI({ apiKey });
+const MODEL_NAME = process.env.GEMINI_MODEL || "gemini-3.6-flash";
 
 const EXPENSE_SCHEMA = {
   type: Type.OBJECT,
@@ -75,7 +76,7 @@ Extract:
 ${userCaption ? `User extra caption: "${userCaption}"` : ""}`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: MODEL_NAME,
       contents: [
         {
           role: "user",
@@ -129,7 +130,7 @@ If yes, extract:
 If the message is NOT an expense (e.g. user asking a question, greeting, or chatting), set isExpense: false.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: MODEL_NAME,
       contents: [{ role: "user", parts: [{ text: prompt }] }],
       config: {
         responseMimeType: "application/json",
