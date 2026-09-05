@@ -22,6 +22,12 @@ const AUTHORIZED_NUMBERS = (process.env.AUTHORIZED_NUMBERS || "")
 // Cache to prevent the bot from responding to its own sent messages
 const botSentMessageIds = new Set();
 
+// Deduplication cache: tracks message IDs that are currently being or have already been processed
+const processedMessageIds = new Set();
+
+// Bot start timestamp (in seconds) to filter out stale history messages replayed on reconnect
+const botStartTime = Math.floor(Date.now() / 1000);
+
 /**
  * Checks if the sender is authorized
  */
@@ -183,10 +189,29 @@ async function startBot() {
     const myLid = (sock.user?.lid || "").split(":")[0].replace(/[^0-9]/g, "");
 
     for (const msg of messages) {
-      if (!msg.message) continue;
+      if (!msg.message || !msg.key?.id) continue;
 
-      // Skip messages sent by the bot process itself
-      if (botSentMessageIds.has(msg.key.id)) continue;
+      // 1. DEDUPLICATION: Check if this message was already processed
+      if (processedMessageIds.has(msg.key.id)) {
+        continue;
+      }
+
+      // 2. SKIP MESSAGES SENT BY BOT ITSELF
+      if (botSentMessageIds.has(msg.key.id)) {
+        continue;
+      }
+
+      // 3. IGNORE HISTORICAL / OLD MESSAGES REPLAYED ON RECONNECT
+      const rawTimestamp = msg.messageTimestamp;
+      const msgTimestamp =
+        typeof rawTimestamp === "number"
+          ? rawTimestamp
+          : rawTimestamp?.low || 0;
+
+      // If message is older than when the bot started, skip it
+      if (msgTimestamp && msgTimestamp < botStartTime - 10) {
+        continue;
+      }
 
       const senderJid = msg.key.remoteJid;
       if (!senderJid) continue;
@@ -203,6 +228,10 @@ async function startBot() {
       if (!msg.key.fromMe && !isAuthorized(senderJid)) {
         continue;
       }
+
+      // Immediately mark as processed to prevent race conditions during async calls
+      processedMessageIds.add(msg.key.id);
+      setTimeout(() => processedMessageIds.delete(msg.key.id), 30 * 60 * 1000);
 
       const messageType = Object.keys(msg.message)[0];
       const isImage = messageType === "imageMessage";
