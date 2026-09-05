@@ -1,21 +1,27 @@
 ﻿# WhatsApp Expense Tracker Bot 🤖💸
 
-Automated personal expense tracking bot for WhatsApp powered by **Baileys**, **Google Gemini 2.5 Flash Vision**, and **Google Sheets**.
+Automated personal finance tracking bot for WhatsApp powered by **Baileys**, **Google Gemini Vision**, and **Google Sheets**.
 
 ---
 
-## ✨ Key Features
+## ✨ Features
 
-- 📸 **Receipt & Transfer OCR**: Send a screenshot of any Indonesian banking app or e-wallet (BCA Mobile, Seabank, GoPay, Grab, QRIS, Livin, OVO, ShopeePay, Indomaret). Gemini Vision automatically extracts the date, merchant, amount, category, and payment source.
-- ✍️ **Natural Language Chat**: Send simple messages like `"Makan siang warteg 18rb seabank"` or `"Kopi 25k bca"`.
-- 📊 **Google Sheets Sync**: Appends transactions directly into the active monthly sheet (e.g., `September 2026`) matching your exact template columns:
-  - `Date` (e.g. `5-Sep-2026`)
-  - `Category` (`Food`, `Living`, `Invest`, `Entertainment`, `Other`)
-  - `Description`
-  - `Amount`
-  - `Source` (`BCA`, `Seabank`, `Grab`, `Superbank`, `Gopay`, `OVO`)
-- 💰 **Live Budget Inquiries**: Type `budget` or `laporan` to get your real-time Remaining Budget, Total Spent, and Category breakdowns.
-- 🔒 **Private & Secure**: Only responds to authorized phone numbers defined in `.env`. Sensitive credentials and session tokens are strictly git-ignored.
+- 📸 **Receipt & Mutation OCR**: Send a screenshot of any Indonesian banking app or e-wallet (BCA Mobile, Seabank, GoPay, Grab, QRIS, Livin, OVO, ShopeePay, Indomaret). Gemini Vision automatically extracts single or multiple transactions.
+- ✍️ **Natural Language & Multi-Transaction**: Send single or multiple expenses in one message:
+  - `"Makan siang 25rb bca, naik grab 35k seabank, bensin 30k bca"`
+- 💵 **Income & Reimbursement Support**:
+  - **Reimbursements / Split-Bill**: Text `"Hans bayar makan 50rb bca"` — recorded as a negative expense (`-Rp 50.000`), automatically reducing that category's total!
+  - **Extra Income**: Text `"Dapat transfer freelance 1.5jt bca"` — automatically added to your monthly Income budget.
+- 📊 **Customized Categories**:
+  - `Food`: meals, coffee, warteg, snacks, beverages.
+  - `Living`: kost, laundry, pulsa, phone/internet subscriptions, haircut.
+  - `Transport`: Grab/Gojek ride, taxi, KAI, train, bensin/fuel, parking, toll.
+  - `Family`: transfers to family/parents, family wifi/bills, family support.
+  - `Entertainment`: games, movies, YouTube/streaming, aquarium, concerts.
+  - `Other`: gifts, weddings, donations, admin fees, miscellaneous.
+- 💳 **Payment Sources**: `BCA`, `Seabank`, `Grab`, `Superbank`, `Gopay`, `OVO`.
+- 💰 **Live Budget Inquiries**: Type `budget` or `laporan` to view real-time balance and breakdowns.
+- 🔒 **Private & Secure**: Only responds to authorized numbers defined in `.env`. Sensitive credentials and session tokens are strictly git-ignored.
 
 ---
 
@@ -32,11 +38,10 @@ Copy `.env.example` to `.env`:
 cp .env.example .env
 ```
 
-Fill in your configuration:
-- `GEMINI_API_KEY`: Get a free key from [Google AI Studio](https://aistudio.google.com/).
-- `SPREADSHEET_ID`: Your Google Sheets ID (e.g., `1LRGekJQ0mUugQbWRs_2lzYeEk7nBPHKdcdveOgTmk_I`).
-- `AUTHORIZED_NUMBERS`: Your WhatsApp number with country code (e.g. `6282112345678`).
-- `GOOGLE_APPLICATION_CREDENTIALS`: Path to your Google Service Account JSON (or configure OAuth).
+Fill in:
+- `GEMINI_API_KEY`: Free key from [Google AI Studio](https://aistudio.google.com/).
+- `SPREADSHEET_ID`: Your Google Sheets ID.
+- `AUTHORIZED_NUMBERS`: Your WhatsApp number with country code (e.g. `62821...`).
 
 ### 3. Run the Bot
 ```bash
@@ -44,34 +49,20 @@ npm start
 ```
 
 ### 4. Link WhatsApp
-- A QR code will display in the terminal.
-- Open **WhatsApp** on your phone > **Linked Devices (Perangkat Tertaut)** > **Link a Device**.
-- Scan the QR code. Once authenticated, session data is preserved in `auth_info_baileys/` so you don't need to rescan on restart.
+- Scan the terminal QR code with **WhatsApp > Linked Devices > Link a Device**.
+- Session is preserved in `auth_info_baileys/` so you won't need to re-scan on restart.
 
 ---
 
 ## 📱 How to Use in WhatsApp
 
-### 1. Log by Screenshot
-Just send a screenshot of your payment receipt! The bot reads it, appends it to your spreadsheet, and confirms:
-```
-✅ Transaksi Berhasil Dicatat dari Screenshot!
-
-📅 Tanggal: 5-Sep-2026
-🏷️ Kategori: Food
-📝 Deskripsi: Kopi Kenangan
-💵 Jumlah: Rp 25.000
-💳 Sumber: BCA
-
-💰 Sisa Budget (September 2026): Rp 9.775.000
-💸 Total Pengeluaran: Rp 25.000
-```
-
-### 2. Log by Text
-Send a quick chat message:
-- `"Makan warteg 18rb seabank"`
-- `"Beli pulsa 50k grab"`
-- `"Bayar wifi fam 233rb bca"`
-
-### 3. Check Budget
-Send `"budget"`, `"sisa budget"`, or `"laporan"` to view your current status.
+1. **Log Single Expense:**
+   - `"Makan warteg 18rb seabank"`
+2. **Log Multiple Expenses:**
+   - `"Makan 20rb bca, bensin 35k seabank, kopi 15k gopay"`
+3. **Log Split-Bill / Reimbursement:**
+   - `"Akbar bayar makan 35rb bca"`
+4. **Log Extra Income:**
+   - `"Dapat freelance 1.5jt bca"`
+5. **Check Budget:**
+   - Type `"budget"` or `"laporan"`

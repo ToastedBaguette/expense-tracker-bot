@@ -9,7 +9,7 @@ import qrcode from "qrcode-terminal";
 import dotenv from "dotenv";
 import path from "path";
 import { parseExpenseFromImage, parseExpenseFromText } from "./gemini.js";
-import { appendExpenses, getMonthlySummary } from "./sheets.js";
+import { appendExpenses, addIncome, getMonthlySummary } from "./sheets.js";
 
 dotenv.config();
 
@@ -35,7 +35,11 @@ function isAuthorized(senderJid) {
  * Format currency number to IDR string
  */
 function formatRupiah(num) {
-  return "Rp " + Number(num).toLocaleString("id-ID");
+  const n = Number(num) || 0;
+  if (n < 0) {
+    return "-Rp " + Math.abs(n).toLocaleString("id-ID");
+  }
+  return "Rp " + n.toLocaleString("id-ID");
 }
 
 /**
@@ -43,16 +47,25 @@ function formatRupiah(num) {
  */
 function formatExpensesConfirmation(expenses, res) {
   const isSingle = expenses.length === 1;
-  const header = isSingle
-    ? `*Transaksi Berhasil Dicatat*`
-    : `*${expenses.length} Transaksi Berhasil Dicatat*`;
+  const hasReimbursement = expenses.some((e) => e.isReimbursement || Number(e.amount) < 0);
+
+  let header;
+  if (isSingle) {
+    header = hasReimbursement
+      ? "*Reimbursement / Split-Bill Berhasil Dicatat*"
+      : "*Transaksi Berhasil Dicatat*";
+  } else {
+    header = `*${expenses.length} Transaksi Berhasil Dicatat*`;
+  }
 
   let msg = `${header}\n`;
   msg += `------------------------------------\n`;
 
   for (const exp of expenses) {
+    const isNeg = Number(exp.amount) < 0 || exp.isReimbursement;
+    const tag = isNeg ? " • Reimbursement" : "";
     msg += `• *${exp.date}* | ${exp.description}\n`;
-    msg += `  ${formatRupiah(exp.amount)} (${exp.category} • ${exp.source})\n`;
+    msg += `  ${formatRupiah(exp.amount)} (${exp.category} • ${exp.source}${tag})\n`;
   }
 
   msg += `------------------------------------\n`;
@@ -65,6 +78,21 @@ function formatExpensesConfirmation(expenses, res) {
   msg += `Sisa Budget (${res.sheetName}): *${res.summary.remainingBudget}*\n`;
   msg += `Total Pengeluaran: *${res.summary.totalExpenses}*`;
 
+  return msg;
+}
+
+/**
+ * Formats income addition confirmation
+ */
+function formatIncomeConfirmation(incomeResult) {
+  let msg = `*Pemasukan Berhasil Ditambahkan*\n`;
+  msg += `------------------------------------\n`;
+  msg += `• Deskripsi: *${incomeResult.description || "Pemasukan"}*\n`;
+  msg += `• Jumlah: *+${formatRupiah(incomeResult.addedAmount)}* (${incomeResult.source || "BCA"})\n`;
+  msg += `------------------------------------\n`;
+  msg += `Total Pemasukan (${incomeResult.sheetName}): *${incomeResult.summary.income}*\n`;
+  msg += `Sisa Budget: *${incomeResult.summary.remainingBudget}*\n`;
+  msg += `Total Pengeluaran: *${incomeResult.summary.totalExpenses}*`;
   return msg;
 }
 
@@ -185,7 +213,7 @@ async function startBot() {
         msg.message.imageMessage?.caption ||
         "";
 
-      // 1. Process Receipt Screenshot (Single or Multiple items)
+      // 1. Process Receipt Screenshot (Expenses, Income, or Mutation)
       if (isImage) {
         await reply(senderJid, {
           text: "Menganalisis bukti transaksi...",
@@ -198,17 +226,19 @@ async function startBot() {
 
           const parsed = await parseExpenseFromImage(buffer, mimeType, caption);
 
-          if (!parsed.isExpense || !parsed.expenses || parsed.expenses.length === 0) {
+          if (parsed.type === "INCOME" && parsed.income) {
+            const res = await addIncome(parsed.income);
+            const replyText = formatIncomeConfirmation(res);
+            await reply(senderJid, { text: replyText });
+          } else if (parsed.type === "EXPENSE" && parsed.expenses && parsed.expenses.length > 0) {
+            const res = await appendExpenses(parsed.expenses);
+            const replyText = formatExpensesConfirmation(parsed.expenses, res);
+            await reply(senderJid, { text: replyText });
+          } else {
             await reply(senderJid, {
-              text: "Gambar tidak terbaca sebagai transaksi pengeluaran yang valid.",
+              text: "Gambar tidak terbaca sebagai transaksi yang valid.",
             });
-            continue;
           }
-
-          const res = await appendExpenses(parsed.expenses);
-          const replyText = formatExpensesConfirmation(parsed.expenses, res);
-
-          await reply(senderJid, { text: replyText });
         } catch (err) {
           console.error("Gagal memproses screenshot:", err);
           await reply(senderJid, {
@@ -238,25 +268,32 @@ async function startBot() {
         continue;
       }
 
-      // 3. Process Natural Language Expense Entry (Single or Multiple)
+      // 3. Process Natural Language Entry (Expense, Reimbursement, or Income)
       if (textBody.trim().length > 0) {
         try {
           const parsed = await parseExpenseFromText(textBody);
 
-          if (parsed.isExpense && parsed.expenses && parsed.expenses.length > 0) {
+          if (parsed.type === "INCOME" && parsed.income) {
+            const res = await addIncome(parsed.income);
+            const replyText = formatIncomeConfirmation(res);
+            await reply(senderJid, { text: replyText });
+          } else if (parsed.type === "EXPENSE" && parsed.expenses && parsed.expenses.length > 0) {
             const res = await appendExpenses(parsed.expenses);
             const replyText = formatExpensesConfirmation(parsed.expenses, res);
-
             await reply(senderJid, { text: replyText });
           } else {
             const help =
               `*WhatsApp Expense Bot*\n\n` +
               `Cara mencatat transaksi:\n` +
-              `1. Kirim foto screenshot bukti transfer / pembayaran / mutasi.\n` +
-              `2. Ketik langsung transaksi (bisa 1 atau banyak sekaligus):\n` +
+              `1. Kirim foto screenshot bukti pembayaran / mutasi.\n` +
+              `2. Catat pengeluaran:\n` +
               `   • _"Makan warteg 18rb seabank"_\n` +
-              `   • _"Kopi 25rb bca, makan 20rb gopay, bensin 35k bca"_\n` +
-              `3. Ketik *budget* untuk melihat sisa budget & ringkasan bulan ini.`;
+              `   • _"Naik grab 35k seabank, bensin 20k bca"_\n` +
+              `3. Catat reimbursement / teman bayar utang:\n` +
+              `   • _"Hans bayar makan 50rb bca"_\n` +
+              `4. Catat pemasukan tambahan:\n` +
+              `   • _"Dapat freelance 1.5jt bca"_\n` +
+              `5. Ketik *budget* untuk melihat sisa budget & ringkasan bulan ini.`;
             await reply(senderJid, { text: help });
           }
         } catch (err) {

@@ -145,6 +145,51 @@ export async function resolveSheetName(dateStr, sheets) {
 }
 
 /**
+ * Adds extra income to cell K3 of the appropriate month
+ */
+export async function addIncome(incomeData) {
+  const sheets = await getSheetsClient();
+  const sheetName = await resolveSheetName(incomeData.date, sheets);
+
+  // Read current formula/value of K3
+  const currentRes = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `'${sheetName}'!K3`,
+    valueRenderOption: "FORMULA",
+  });
+
+  const currentVal = currentRes.data.values?.[0]?.[0];
+  let newFormula;
+
+  if (typeof currentVal === "string" && currentVal.startsWith("=")) {
+    newFormula = `${currentVal}+${incomeData.amount}`;
+  } else if (currentVal !== undefined && currentVal !== null) {
+    newFormula = `=${currentVal}+${incomeData.amount}`;
+  } else {
+    newFormula = `=${incomeData.amount}`;
+  }
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `'${sheetName}'!K3`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: {
+      values: [[newFormula]],
+    },
+  });
+
+  const summary = await getMonthlySummary(sheetName);
+
+  return {
+    sheetName,
+    addedAmount: incomeData.amount,
+    description: incomeData.description,
+    source: incomeData.source,
+    summary,
+  };
+}
+
+/**
  * Appends multiple expenses at once (batched per target sheet)
  */
 export async function appendExpenses(expenses) {
@@ -215,8 +260,8 @@ export async function getMonthlySummary(sheetName = null) {
       spreadsheetId,
       ranges: [
         `'${sheetName}'!K3:M3`,   // Income, Total Expenses, Remaining Budget
-        `'${sheetName}'!K6:L10`,  // Category totals
-        `'${sheetName}'!K13:L17`, // Source totals
+        `'${sheetName}'!K6:L11`,  // 6 Categories: Food, Living, Transport, Family, Entertainment, Other
+        `'${sheetName}'!K14:L18`, // 5 Sources: Gopay, BCA, Seabank, Grab, Superbank
       ],
       valueRenderOption: "FORMATTED_VALUE",
     });
