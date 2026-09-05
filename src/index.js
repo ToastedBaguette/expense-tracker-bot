@@ -9,7 +9,7 @@ import qrcode from "qrcode-terminal";
 import dotenv from "dotenv";
 import path from "path";
 import { parseExpenseFromImage, parseExpenseFromText } from "./gemini.js";
-import { appendExpense, getMonthlySummary, getSheetNameFromDate } from "./sheets.js";
+import { appendExpense, getMonthlySummary } from "./sheets.js";
 
 dotenv.config();
 
@@ -18,6 +18,9 @@ const AUTHORIZED_NUMBERS = (process.env.AUTHORIZED_NUMBERS || "")
   .split(",")
   .map((num) => num.trim().replace(/[^0-9]/g, ""))
   .filter(Boolean);
+
+// Cache to prevent the bot from responding to its own sent messages
+const botSentMessageIds = new Set();
 
 /**
  * Checks if the sender is authorized
@@ -77,6 +80,20 @@ async function startBot() {
 
   sock.ev.on("creds.update", saveCreds);
 
+  // Helper to send message and track its ID so bot doesn't loop on its own replies
+  async function reply(jid, content) {
+    try {
+      const sent = await sock.sendMessage(jid, content);
+      if (sent?.key?.id) {
+        botSentMessageIds.add(sent.key.id);
+        setTimeout(() => botSentMessageIds.delete(sent.key.id), 5 * 60 * 1000);
+      }
+      return sent;
+    } catch (err) {
+      console.error("Error sending message:", err);
+    }
+  }
+
   sock.ev.on("connection.update", (update) => {
     const { connection, lastDisconnect, qr } = update;
 
@@ -96,27 +113,55 @@ async function startBot() {
         startBot();
       }
     } else if (connection === "open") {
-      console.log("✅ Bot WhatsApp berhasil terhubung dan siap digunakan!");
-      console.log("Nomor terdaftar:", sock.user?.id);
+      console.log("\n=======================================================");
+      console.log("✅ Bot WhatsApp berhasil terhubung dan aktif!");
+      console.log("ID Akun:", sock.user?.id);
+      console.log("📱 CARA MEMULAI:");
+      console.log("   1. Buka WhatsApp di HP Anda");
+      console.log("   2. Buka chat ke DIRI SENDIRI ('Message yourself' / 'Kirim pesan ke diri Anda')");
+      console.log("   3. Ketik 'budget' atau kirim foto screenshot transaksi!");
+      console.log("=======================================================\n");
     }
   });
 
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
 
+    const myPhone = (sock.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
+    const myLid = (sock.user?.lid || "").split(":")[0].replace(/[^0-9]/g, "");
+
     for (const msg of messages) {
-      if (!msg.message || msg.key.fromMe) continue;
+      if (!msg.message) continue;
+
+      // Skip messages sent by this bot process itself
+      if (botSentMessageIds.has(msg.key.id)) continue;
 
       const senderJid = msg.key.remoteJid;
-      if (!isAuthorized(senderJid)) {
+      if (!senderJid) continue;
+
+      // Ignore broadcast status updates
+      if (senderJid === "status@broadcast") continue;
+
+      // Check if this message was sent to self ("Message yourself" / chat dengan diri sendiri)
+      const isSelfChat =
+        (myPhone && senderJid.includes(myPhone)) ||
+        (myLid && senderJid.includes(myLid));
+
+      // If the message is marked fromMe:
+      // Allow it ONLY if it's sent in a self-chat!
+      // If it was sent in a chat with someone else or a group, ignore so we don't interfere with personal chats.
+      if (msg.key.fromMe && !isSelfChat) {
+        continue;
+      }
+
+      // If it's an incoming message from someone else, verify authorization
+      if (!msg.key.fromMe && !isAuthorized(senderJid)) {
         console.log(`Pesan diabaikan dari nomor tidak terdaftar: ${senderJid}`);
         continue;
       }
 
       const messageType = Object.keys(msg.message)[0];
       const isImage = messageType === "imageMessage";
-      const isExtendedText = messageType === "extendedTextMessage";
-      const isConversation = messageType === "conversation";
 
       const textBody =
         msg.message.conversation ||
@@ -126,7 +171,7 @@ async function startBot() {
 
       // 1. Process Receipt Screenshot
       if (isImage) {
-        await sock.sendMessage(senderJid, {
+        await reply(senderJid, {
           text: "🔍 *Menganalisis screenshot transaksi dengan Gemini Vision...*",
         });
 
@@ -138,7 +183,7 @@ async function startBot() {
           const parsed = await parseExpenseFromImage(buffer, mimeType, caption);
 
           if (!parsed.isExpense) {
-            await sock.sendMessage(senderJid, {
+            await reply(senderJid, {
               text: "⚠️ Maaf, gambar tidak terbaca sebagai bukti transaksi atau screenshot pembayaran yang valid.",
             });
             continue;
@@ -146,19 +191,19 @@ async function startBot() {
 
           const res = await appendExpense(parsed);
 
-          let reply = `✅ *Transaksi Berhasil Dicatat dari Screenshot!*\n\n`;
-          reply += `📅 Tanggal: *${parsed.date}*\n`;
-          reply += `🏷️ Kategori: *${parsed.category}*\n`;
-          reply += `📝 Deskripsi: *${parsed.description}*\n`;
-          reply += `💵 Jumlah: *${formatRupiah(parsed.amount)}*\n`;
-          reply += `💳 Sumber: *${parsed.source}*\n\n`;
-          reply += `💰 *Sisa Budget (${res.sheetName}):* ${res.summary.remainingBudget}\n`;
-          reply += `💸 *Total Pengeluaran:* ${res.summary.totalExpenses}`;
+          let replyText = `✅ *Transaksi Berhasil Dicatat dari Screenshot!*\n\n`;
+          replyText += `📅 Tanggal: *${parsed.date}*\n`;
+          replyText += `🏷️ Kategori: *${parsed.category}*\n`;
+          replyText += `📝 Deskripsi: *${parsed.description}*\n`;
+          replyText += `💵 Jumlah: *${formatRupiah(parsed.amount)}*\n`;
+          replyText += `💳 Sumber: *${parsed.source}*\n\n`;
+          replyText += `💰 *Sisa Budget (${res.sheetName}):* ${res.summary.remainingBudget}\n`;
+          replyText += `💸 *Total Pengeluaran:* ${res.summary.totalExpenses}`;
 
-          await sock.sendMessage(senderJid, { text: reply });
+          await reply(senderJid, { text: replyText });
         } catch (err) {
           console.error("Gagal memproses screenshot:", err);
-          await sock.sendMessage(senderJid, {
+          await reply(senderJid, {
             text: `❌ Terjadi kesalahan saat membaca bukti transaksi: ${err.message}`,
           });
         }
@@ -175,12 +220,12 @@ async function startBot() {
         cleanText === "laporan"
       ) {
         try {
-          await sock.sendMessage(senderJid, { text: "⏳ Mengambil data laporan keuangan..." });
+          await reply(senderJid, { text: "⏳ Mengambil data laporan keuangan..." });
           const summary = await getMonthlySummary();
-          const reply = formatSummaryMessage(summary);
-          await sock.sendMessage(senderJid, { text: reply });
+          const summaryText = formatSummaryMessage(summary);
+          await reply(senderJid, { text: summaryText });
         } catch (err) {
-          await sock.sendMessage(senderJid, { text: `❌ Gagal mengambil ringkasan: ${err.message}` });
+          await reply(senderJid, { text: `❌ Gagal mengambil ringkasan: ${err.message}` });
         }
         continue;
       }
@@ -193,16 +238,16 @@ async function startBot() {
           if (parsed.isExpense) {
             const res = await appendExpense(parsed);
 
-            let reply = `✅ *Transaksi Berhasil Dicatat!*\n\n`;
-            reply += `📅 Tanggal: *${parsed.date}*\n`;
-            reply += `🏷️ Kategori: *${parsed.category}*\n`;
-            reply += `📝 Deskripsi: *${parsed.description}*\n`;
-            reply += `💵 Jumlah: *${formatRupiah(parsed.amount)}*\n`;
-            reply += `💳 Sumber: *${parsed.source}*\n\n`;
-            reply += `💰 *Sisa Budget (${res.sheetName}):* ${res.summary.remainingBudget}\n`;
-            reply += `💸 *Total Pengeluaran:* ${res.summary.totalExpenses}`;
+            let replyText = `✅ *Transaksi Berhasil Dicatat!*\n\n`;
+            replyText += `📅 Tanggal: *${parsed.date}*\n`;
+            replyText += `🏷️ Kategori: *${parsed.category}*\n`;
+            replyText += `📝 Deskripsi: *${parsed.description}*\n`;
+            replyText += `💵 Jumlah: *${formatRupiah(parsed.amount)}*\n`;
+            replyText += `💳 Sumber: *${parsed.source}*\n\n`;
+            replyText += `💰 *Sisa Budget (${res.sheetName}):* ${res.summary.remainingBudget}\n`;
+            replyText += `💸 *Total Pengeluaran:* ${res.summary.totalExpenses}`;
 
-            await sock.sendMessage(senderJid, { text: reply });
+            await reply(senderJid, { text: replyText });
           } else {
             // General Help
             const help =
@@ -214,11 +259,11 @@ async function startBot() {
               `   • _"Kopi starbucks 55k bca"_\n` +
               `   • _"Beli pulsa 100rb grab"_\n` +
               `3. 📊 Ketik *budget* untuk melihat sisa budget & ringkasan pengeluaran bulan ini.`;
-            await sock.sendMessage(senderJid, { text: help });
+            await reply(senderJid, { text: help });
           }
         } catch (err) {
           console.error("Gagal memproses pesan teks:", err);
-          await sock.sendMessage(senderJid, {
+          await reply(senderJid, {
             text: `❌ Terjadi kesalahan: ${err.message}`,
           });
         }
