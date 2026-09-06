@@ -1,13 +1,13 @@
-﻿{
+{
     "name":  "expense-tracker-bot",
     "version":  "1.0.0",
     "description":  "Multi-platform Personal Expense Tracker Bot (Discord \u0026 WhatsApp) powered by Gemini Vision and Google Sheets",
-    "main":  "src/index.js",
+    "main":  "src/start.js",
     "type":  "module",
     "scripts":  {
                     "start:whatsapp":  "node src/index.js",
                     "start:discord":  "node src/discord.js",
-                    "start":  "node src/discord.js"
+                    "start":  "node src/start.js"
                 },
     "keywords":  [
                      "whatsapp",

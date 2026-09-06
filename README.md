@@ -309,11 +309,22 @@ npm install
 npm start
 ```
 
-The bot will connect to Discord and start listening for messages. You should see a message like:
+If both Discord and WhatsApp are configured in `.env`, the bot will prompt you to choose:
 
 ```
-Discord Expense Bot online as: Expense Bot#1234
-Ready to receive receipts and expense messages!
+Both Discord and WhatsApp are configured.
+
+  1. Discord (recommended)
+  2. WhatsApp
+
+Select platform [1/2]:
+```
+
+If only one platform is configured, it starts automatically. You can also bypass the prompt with:
+
+```bash
+npm run start:discord    # always start Discord
+npm run start:whatsapp   # always start WhatsApp
 ```
 
 ---
@@ -427,6 +438,7 @@ AUTHORIZED_NUMBERS=628XXXXXXXXXX
 ```
 expense-tracker-bot/
 ├── src/
+│   ├── start.js        # Unified launcher with platform selection
 │   ├── gemini.js       # Gemini Vision OCR + NLP text parser
 │   ├── sheets.js       # Google Sheets API client (read/write)
 │   ├── discord.js      # Discord bot (recommended)
@@ -439,6 +451,7 @@ expense-tracker-bot/
 
 | File          | Description                                                                 |
 |---------------|-----------------------------------------------------------------------------|
+| `start.js`    | Entry point. Prompts for platform choice when both Discord and WhatsApp are configured. |
 | `gemini.js`   | Sends images/text to Gemini for structured extraction. Multi-model fallback (gemini-3.5-flash → gemini-3.6-flash → gemini-flash-latest). |
 | `sheets.js`   | Handles authentication (service account / OAuth), resolves sheet tab names dynamically, appends expenses, adds income, reads summaries. |
 | `discord.js`  | Discord.js bot with rich embed responses, image attachment OCR, channel and user restrictions. |
