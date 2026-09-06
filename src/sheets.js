@@ -41,7 +41,7 @@ export async function getSheetsClient() {
     auth = oauth2Client;
   } else {
     // 3. Fallback: check local MCP tokens if available
-    const mcpTokenPath = "C:\\Users\\62821\\.gemini\\antigravity\\mcp_oauth_tokens.json";
+    const mcpTokenPath = "C:\\Users\\62821\\.gemini\antigravity\\mcp_oauth_tokens.json";
     if (fs.existsSync(mcpTokenPath)) {
       try {
         const mcpTokens = JSON.parse(fs.readFileSync(mcpTokenPath, "utf-8"));
@@ -151,7 +151,6 @@ export async function addIncome(incomeData) {
   const sheets = await getSheetsClient();
   const sheetName = await resolveSheetName(incomeData.date, sheets);
 
-  // Read current formula/value of K3
   const currentRes = await sheets.spreadsheets.values.get({
     spreadsheetId,
     range: `'${sheetName}'!K3`,
@@ -190,7 +189,9 @@ export async function addIncome(incomeData) {
 }
 
 /**
- * Appends multiple expenses at once (batched per target sheet)
+ * Appends multiple expenses at once without inserting full worksheet rows.
+ * Writes directly into the next empty rows in Columns B:F to preserve the
+ * side tables (Columns H to M) intact.
  */
 export async function appendExpenses(expenses) {
   if (!Array.isArray(expenses) || expenses.length === 0) {
@@ -218,11 +219,22 @@ export async function appendExpenses(expenses) {
   let lastSheetName = null;
   for (const [sheetName, rows] of Object.entries(sheetGroups)) {
     lastSheetName = sheetName;
-    await sheets.spreadsheets.values.append({
+
+    // Find the next available row in Column B (transactions start at row 3)
+    const checkRes = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `'${sheetName}'!B:F`,
+      range: `'${sheetName}'!B3:B996`,
+    });
+
+    const existingRows = checkRes.data.values ? checkRes.data.values.length : 0;
+    const startRow = 3 + existingRows;
+    const endRow = startRow + rows.length - 1;
+
+    // Update only the targeted range B:F — NEVER inserts sheet rows
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${sheetName}'!B${startRow}:F${endRow}`,
       valueInputOption: "USER_ENTERED",
-      insertDataOption: "INSERT_ROWS",
       requestBody: {
         values: rows,
       },
