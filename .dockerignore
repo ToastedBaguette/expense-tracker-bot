@@ -1,0 +1,11 @@
+node_modules
+npm-debug.log
+auth_info_baileys
+.env
+service_account.json
+credentials.json
+token.json
+.git
+.gitignore
+README.md
+LICENSE

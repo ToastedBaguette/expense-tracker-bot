@@ -1,0 +1,17 @@
+services:
+  bot:
+    build: .
+    env_file:
+      - .env
+    environment:
+      # Set to "discord" or "whatsapp" to skip the interactive prompt
+      - PLATFORM=discord
+    volumes:
+      # Mount service account credentials if using a service account
+      - ./service_account.json:/app/service_account.json:ro
+      # Persist WhatsApp auth session across restarts (only needed for WhatsApp)
+      - ./auth_info_baileys:/app/auth_info_baileys
+    restart: unless-stopped
+    # Use interactive mode if you need the platform selection prompt or WhatsApp QR scan
+    # stdin_open: true
+    # tty: true

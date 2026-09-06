@@ -18,12 +18,13 @@ Supports **Discord** (recommended) and **WhatsApp**.
 7. [Step 4 — Create a Discord Bot](#step-4--create-a-discord-bot)
 8. [Step 5 — Configure Environment Variables](#step-5--configure-environment-variables)
 9. [Step 6 — Install and Run](#step-6--install-and-run)
-10. [Usage Examples](#usage-examples)
-11. [Optional: Google Sheets MCP Setup](#optional-google-sheets-mcp-setup)
-12. [Running on WhatsApp (Alternative)](#running-on-whatsapp-alternative)
-13. [Project Structure](#project-structure)
-14. [Troubleshooting](#troubleshooting)
-15. [License](#license)
+10. [Running with Docker](#running-with-docker)
+11. [Usage Examples](#usage-examples)
+12. [Optional: Google Sheets MCP Setup](#optional-google-sheets-mcp-setup)
+13. [Running on WhatsApp (Alternative)](#running-on-whatsapp-alternative)
+14. [Project Structure](#project-structure)
+15. [Troubleshooting](#troubleshooting)
+16. [License](#license)
 
 ---
 
@@ -329,6 +330,61 @@ npm run start:whatsapp   # always start WhatsApp
 
 ---
 
+## Running with Docker
+
+If you prefer containers, the project includes a Dockerfile and docker-compose configuration.
+
+### Using Docker Compose (recommended)
+
+1. Make sure your `.env` and `service_account.json` files are in the project root.
+
+2. Set the platform in `docker-compose.yml` (or in your `.env`):
+   ```yaml
+   environment:
+     - PLATFORM=discord    # or "whatsapp"
+   ```
+
+3. Build and start:
+   ```bash
+   docker compose up -d --build
+   ```
+
+4. View logs:
+   ```bash
+   docker compose logs -f
+   ```
+
+5. Stop:
+   ```bash
+   docker compose down
+   ```
+
+### Using Docker directly
+
+```bash
+# Build the image
+docker build -t expense-tracker-bot .
+
+# Run with Discord
+docker run -d --name expense-bot \
+  --env-file .env \
+  -e PLATFORM=discord \
+  -v ./service_account.json:/app/service_account.json:ro \
+  expense-tracker-bot
+
+# Run with WhatsApp (needs interactive mode for QR scan)
+docker run -it --name expense-bot \
+  --env-file .env \
+  -e PLATFORM=whatsapp \
+  -v ./service_account.json:/app/service_account.json:ro \
+  -v ./auth_info_baileys:/app/auth_info_baileys \
+  expense-tracker-bot
+```
+
+The `PLATFORM` environment variable (`discord` or `whatsapp`) tells the launcher which bot to start without the interactive prompt. If not set, the launcher falls back to auto-detection or the interactive menu.
+
+---
+
 ## Usage Examples
 
 ### Record a single expense
@@ -443,6 +499,9 @@ expense-tracker-bot/
 │   ├── sheets.js       # Google Sheets API client (read/write)
 │   ├── discord.js      # Discord bot (recommended)
 │   └── index.js        # WhatsApp bot (alternative)
+├── Dockerfile
+├── docker-compose.yml
+├── .dockerignore
 ├── .env.example        # Environment variable template
 ├── .gitignore
 ├── package.json

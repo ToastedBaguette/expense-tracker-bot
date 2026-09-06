@@ -5,6 +5,7 @@ dotenv.config();
 
 const hasDiscord = !!process.env.DISCORD_TOKEN;
 const hasWhatsApp = !!process.env.AUTHORIZED_NUMBERS;
+const platformEnv = (process.env.PLATFORM || "").toLowerCase().trim();
 
 async function prompt(question) {
   const rl = readline.createInterface({
@@ -19,17 +20,35 @@ async function prompt(question) {
   });
 }
 
+async function startDiscord() {
+  console.log("Starting Discord bot...\n");
+  await import("./discord.js");
+}
+
+async function startWhatsApp() {
+  console.log("Starting WhatsApp bot...\n");
+  await import("./index.js");
+}
+
 async function main() {
+  // PLATFORM env var takes priority (useful for Docker / CI)
+  if (platformEnv === "discord") {
+    await startDiscord();
+    return;
+  }
+  if (platformEnv === "whatsapp") {
+    await startWhatsApp();
+    return;
+  }
+
   // If only one platform is configured, start it directly
   if (hasDiscord && !hasWhatsApp) {
-    console.log("Starting Discord bot...\n");
-    await import("./discord.js");
+    await startDiscord();
     return;
   }
 
   if (hasWhatsApp && !hasDiscord) {
-    console.log("Starting WhatsApp bot...\n");
-    await import("./index.js");
+    await startWhatsApp();
     return;
   }
 
@@ -51,11 +70,9 @@ async function main() {
   const answer = await prompt("Select platform [1/2]: ");
 
   if (answer === "2" || answer.toLowerCase().startsWith("w")) {
-    console.log("\nStarting WhatsApp bot...\n");
-    await import("./index.js");
+    await startWhatsApp();
   } else {
-    console.log("\nStarting Discord bot...\n");
-    await import("./discord.js");
+    await startDiscord();
   }
 }
 
