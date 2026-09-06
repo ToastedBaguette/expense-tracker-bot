@@ -1,4 +1,4 @@
-﻿import { google } from "googleapis";
+import { google } from "googleapis";
 import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
@@ -41,7 +41,7 @@ export async function getSheetsClient() {
     auth = oauth2Client;
   } else {
     // 3. Fallback: check local MCP tokens if available
-    const mcpTokenPath = "C:\\Users\\62821\\.gemini\antigravity\\mcp_oauth_tokens.json";
+    const mcpTokenPath = "C:\\Users\\62821\\.gemini\\antigravity\\mcp_oauth_tokens.json";
     if (fs.existsSync(mcpTokenPath)) {
       try {
         const mcpTokens = JSON.parse(fs.readFileSync(mcpTokenPath, "utf-8"));

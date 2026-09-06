@@ -12,7 +12,7 @@ Supports **Discord** (recommended) and **WhatsApp**.
 1. [Features](#features)
 2. [How It Works](#how-it-works)
 3. [Prerequisites](#prerequisites)
-4. [Step 1 — Create the Google Sheets Template](#step-1--create-the-google-sheets-template)
+4. [Step 1 — Set Up Your Google Sheet](#step-1--set-up-your-google-sheet)
 5. [Step 2 — Get a Gemini API Key](#step-2--get-a-gemini-api-key)
 6. [Step 3 — Set Up Google Sheets Credentials](#step-3--set-up-google-sheets-credentials)
 7. [Step 4 — Create a Discord Bot](#step-4--create-a-discord-bot)
@@ -79,93 +79,71 @@ The bot uses the **Google Sheets REST API** (`googleapis` npm package) directly 
 
 ---
 
-## Step 1 — Create the Google Sheets Template
+## Step 1 — Set Up Your Google Sheet
 
-Create a new Google Sheets spreadsheet that the bot will write to. The spreadsheet uses monthly tabs (one per month, e.g. "September 2026", "Aug 2026").
+The bot reads and writes to a Google Sheets spreadsheet organized by monthly tabs (e.g. `September 2026`, `October 2026`).
 
-### 1.1 Create the spreadsheet
+### Method 1: Import the Pre-Built Template (Recommended — 10 Seconds)
 
-1. Go to [sheets.google.com](https://sheets.google.com) and create a new spreadsheet.
-2. Name it something like **"Expenses"**.
-3. Rename the first sheet tab to the current month, e.g. `September 2026`.
+A ready-to-use template file is included in this repository at [`template/expense_tracker_template.xlsx`](template/expense_tracker_template.xlsx). It contains all headers, formatting, SUMIF formulas, category breakdowns, and dropdown validations.
 
-### 1.2 Set up the transaction columns (B:F)
+1. Go to [sheets.google.com](https://sheets.google.com) and create a **Blank spreadsheet**.
+2. Click **File > Import > Upload**.
+3. Drag and drop the [`expense_tracker_template.xlsx`](template/expense_tracker_template.xlsx) file from this repository.
+4. Select **Replace spreadsheet** and click **Import data**.
+5. Change cell `K3` to your starting monthly income budget (e.g. `9800000`).
 
-Starting from **row 2**, add these headers in cells **B2 through F2**:
+That's it! Your spreadsheet is fully configured.
 
-| Cell | Header      |
-|------|-------------|
-| B2   | Date        |
-| C2   | Category    |
-| D2   | Description |
-| E2   | Amount      |
-| F2   | Source      |
+<details>
+<summary><b>Method 2: Create from Scratch (Manual Setup)</b></summary>
 
-Transactions will be appended starting from **row 3** downward (B3:F3, B4:F4, etc.).
+If you prefer building the sheet manually without the template file:
 
-**Column A** is intentionally left empty as a spacer.
+1. Create a blank spreadsheet and rename the first tab to the current month (e.g. `September 2026`).
+2. **Transaction Columns (B2:F2)**: Add headers `Date` (B2), `Category` (C2), `Description` (D2), `Amount` (E2), `Source` (F2).
+3. **Daily Breakdown (H2:I33)**:
+   - H2: `Date`, I2: `Total Expenses`
+   - In H3:H33, enter the month's dates (e.g. `1-Sep-2026` to `30-Sep-2026`).
+   - In I3, enter `=SUMIF($B$3:$B$996, H3, $E$3:$E$996)` and copy down to row 33.
+4. **Summary Overview (K2:M3)**:
+   - K2: `Income`, L2: `Total Expenses`, M2: `Remaining Budget`
+   - K3: Enter your monthly income (e.g. `9800000`)
+   - L3: `=SUM(L6:L11)`
+   - M3: `=K3-L3`
+5. **Category Totals (K5:L11)**:
+   - K5: `Category`, L5: `Total`
+   - K6: `Food` → L6: `=SUMIF($C$3:$C$996, K6, $E$3:$E$996)`
+   - K7: `Living` → L7: `=SUMIF($C$3:$C$996, K7, $E$3:$E$996)`
+   - K8: `Transport` → L8: `=SUMIF($C$3:$C$996, K8, $E$3:$E$996)`
+   - K9: `Family` → L9: `=SUMIF($C$3:$C$996, K9, $E$3:$E$996)`
+   - K10: `Entertainment` → L10: `=SUMIF($C$3:$C$996, K10, $E$3:$E$996)`
+   - K11: `Other` → L11: `=SUMIF($C$3:$C$996, K11, $E$3:$E$996)`
+6. **Source Totals (K13:L18)**:
+   - K13: `Source`, L13: `Total`
+   - K14: `Gopay` → L14: `=SUMIF($F$3:$F$996, K14, $E$3:$E$996)`
+   - K15: `BCA` → L15: `=SUMIF($F$3:$F$996, K15, $E$3:$E$996)`
+   - K16: `Seabank` → L16: `=SUMIF($F$3:$F$996, K16, $E$3:$E$996)`
+   - K17: `Grab` → L17: `=SUMIF($F$3:$F$996, K17, $E$3:$E$996)`
+   - K18: `Superbank` → L18: `=SUMIF($F$3:$F$996, K18, $E$3:$E$996)`
+7. **Data Validation**:
+   - Select `C3:C996` > Data > Data validation > Dropdown list: `Food, Living, Transport, Family, Entertainment, Other`
+   - Select `F3:F996` > Data > Data validation > Dropdown list: `BCA, Seabank, Grab, Superbank, Gopay, OVO`
 
-### 1.3 Set up the daily breakdown table (H:I)
+</details>
 
-This table shows total spending per day of the month.
+### Copy Your Spreadsheet ID
 
-| Cell | Value                                                    |
-|------|----------------------------------------------------------|
-| H2   | `Date`                                                   |
-| I2   | `Total`                                                  |
-| H3   | `1` (the day number, as a date serial or just the number)|
-| I3   | `=SUMPRODUCT((DAY(B$3:B$996)=DAY(H3))*(E$3:E$996))`     |
-
-Fill H3:H33 with days 1 through 31 (or use actual date serials for the month).
-Copy the `I3` formula down through `I33`.
-
-### 1.4 Set up the summary area (K:M)
-
-| Cell | Label / Formula                                                  |
-|------|------------------------------------------------------------------|
-| K2   | `Overview` (header)                                              |
-| K3   | `Income` (label)     — put your monthly income value, e.g. `9800000` |
-| L3   | `Total Expenses` — formula: `=SUM(L6:L11)`                      |
-| M3   | `Remaining` — formula: `=K3-L3`                                 |
-
-### 1.5 Set up category totals (K6:L11)
-
-| Cell | Category      | Formula                                            |
-|------|---------------|----------------------------------------------------|
-| K6   | Food          | L6: `=SUMIFS(E$3:E$996,C$3:C$996,"Food")`          |
-| K7   | Living        | L7: `=SUMIFS(E$3:E$996,C$3:C$996,"Living")`        |
-| K8   | Transport     | L8: `=SUMIFS(E$3:E$996,C$3:C$996,"Transport")`     |
-| K9   | Family        | L9: `=SUMIFS(E$3:E$996,C$3:C$996,"Family")`        |
-| K10  | Entertainment | L10: `=SUMIFS(E$3:E$996,C$3:C$996,"Entertainment")`|
-| K11  | Other         | L11: `=SUMIFS(E$3:E$996,C$3:C$996,"Other")`        |
-
-### 1.6 Set up source totals (K14:L18)
-
-| Cell | Source   | Formula                                           |
-|------|----------|---------------------------------------------------|
-| K14  | Gopay    | L14: `=SUMIFS(E$3:E$996,F$3:F$996,"Gopay")`      |
-| K15  | BCA      | L15: `=SUMIFS(E$3:E$996,F$3:F$996,"BCA")`        |
-| K16  | Seabank  | L16: `=SUMIFS(E$3:E$996,F$3:F$996,"Seabank")`    |
-| K17  | Grab     | L17: `=SUMIFS(E$3:E$996,F$3:F$996,"Grab")`       |
-| K18  | Superbank| L18: `=SUMIFS(E$3:E$996,F$3:F$996,"Superbank")`  |
-
-### 1.7 (Optional) Add data validation for Category column
-
-Select the range **C3:C996**, go to **Data > Data validation**, and add a dropdown list with:
-`Food, Living, Transport, Family, Entertainment, Other`
-
-### 1.8 Note the Spreadsheet ID
-
-Your spreadsheet URL looks like:
+Look at your spreadsheet's URL in your browser:
 ```
-https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit
+https://docs.google.com/spreadsheets/d/YOUR_SPREADSHEET_ID_HERE/edit
 ```
 
-Copy the long string between `/d/` and `/edit` — that is your **Spreadsheet ID**. You will need this for the `.env` file.
+Copy the string between `/d/` and `/edit`. You will set this as `SPREADSHEET_ID` in your `.env` file.
 
-### 1.9 Duplicate for new months
+### Adding New Months
 
-Each month, duplicate the sheet tab and rename it (e.g. "October 2026"). Clear the transaction rows (B3:F downward) and update the income in K3 if needed. The formulas will recalculate automatically.
+At the beginning of each new month, simply duplicate the current sheet tab in Google Sheets, rename it (e.g. `October 2026`), clear the transaction rows (`B3:F` downward), and adjust your starting income in `K3`. All formulas and breakdowns will automatically adapt.
 
 ---
 
@@ -499,6 +477,10 @@ expense-tracker-bot/
 │   ├── sheets.js       # Google Sheets API client (read/write)
 │   ├── discord.js      # Discord bot (recommended)
 │   └── index.js        # WhatsApp bot (alternative)
+├── template/
+│   └── expense_tracker_template.xlsx  # Ready-to-import spreadsheet template
+├── scripts/
+│   └── generate_template.js           # Script to regenerate template file
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .dockerignore
