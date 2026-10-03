@@ -2,6 +2,7 @@ import { google } from "googleapis";
 import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
+import { getTodayDateFormatted } from "./gemini.js";
 
 dotenv.config();
 
@@ -9,6 +10,16 @@ const spreadsheetId = process.env.SPREADSHEET_ID;
 
 let cachedSheetTitles = null;
 let lastCacheTime = 0;
+
+// Appends read the next free row and then write to it, so writes run one at a time to stop
+// two messages handled at once from claiming the same row (guards this process only)
+let writeQueue = Promise.resolve();
+
+function withWriteLock(task) {
+  const run = writeQueue.then(task);
+  writeQueue = run.catch(() => {});
+  return run;
+}
 
 /**
  * Initializes Google Sheets API client
@@ -39,25 +50,6 @@ export async function getSheetsClient() {
       refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
     });
     auth = oauth2Client;
-  } else {
-    // 3. Fallback: check local MCP tokens if available
-    const mcpTokenPath = "C:\\Users\\62821\\.gemini\\antigravity\\mcp_oauth_tokens.json";
-    if (fs.existsSync(mcpTokenPath)) {
-      try {
-        const mcpTokens = JSON.parse(fs.readFileSync(mcpTokenPath, "utf-8"));
-        const config = mcpTokens["https://sheetsmcp.googleapis.com/mcp/v1"];
-        if (config?.token?.access_token) {
-          const oauth2Client = new google.auth.OAuth2(config.client_id, config.client_secret);
-          oauth2Client.setCredentials({
-            access_token: config.token.access_token,
-            refresh_token: config.token.refresh_token,
-          });
-          auth = oauth2Client;
-        }
-      } catch (err) {
-        console.warn("Could not load MCP fallback tokens:", err.message);
-      }
-    }
   }
 
   if (!auth) {
@@ -70,11 +62,12 @@ export async function getSheetsClient() {
 }
 
 /**
- * Retrieves the available sheet tab titles from Google Sheets
+ * Retrieves the available sheet tab titles from Google Sheets.
+ * Cached for 15 minutes; pass `refresh` to bypass the cache.
  */
-export async function getAvailableSheetTitles(sheets) {
+export async function getAvailableSheetTitles(sheets, refresh = false) {
   const now = Date.now();
-  if (cachedSheetTitles && now - lastCacheTime < 15 * 60 * 1000) {
+  if (!refresh && cachedSheetTitles && now - lastCacheTime < 15 * 60 * 1000) {
     return cachedSheetTitles;
   }
 
@@ -87,67 +80,76 @@ export async function getAvailableSheetTitles(sheets) {
     lastCacheTime = now;
     return cachedSheetTitles;
   } catch (err) {
-    console.warn("Error fetching sheet titles:", err.message);
-    return cachedSheetTitles || ["September 2026", "Aug 2026"];
+    if (!cachedSheetTitles) throw err;
+    console.warn("Error fetching sheet titles, using cached list:", err.message);
+    return cachedSheetTitles;
   }
 }
 
 /**
- * Dynamically resolves the actual sheet tab name that exists in the spreadsheet
+ * Finds the sheet tab whose title contains both the month and the year of `dateStr`
+ * ("D-MMM-YYYY"). Returns null when there is no such tab.
+ */
+export async function findSheetName(dateStr, sheets) {
+  const parts = (dateStr || "").split("-");
+  if (parts.length < 3) return null;
+
+  const mCode = parts[1].toLowerCase();
+  const year = parts[2];
+
+  const monthAliases = {
+    jan: ["jan", "january", "januari"],
+    feb: ["feb", "february", "februari"],
+    mar: ["mar", "march", "maret"],
+    apr: ["apr", "april"],
+    may: ["may", "mei"],
+    jun: ["jun", "june", "juni"],
+    jul: ["jul", "july", "juli"],
+    aug: ["aug", "august", "agustus"],
+    sep: ["sep", "september"],
+    oct: ["oct", "october", "oktober"],
+    nov: ["nov", "november"],
+    dec: ["dec", "december", "desember"],
+  };
+
+  const aliases = monthAliases[mCode] || [mCode];
+
+  const isMatch = (t) => {
+    const lower = t.toLowerCase();
+    return lower.includes(year) && aliases.some((a) => lower.includes(a));
+  };
+
+  // A tab added in the last 15 minutes isn't in the cache yet, so refetch once before giving up
+  return (
+    (await getAvailableSheetTitles(sheets)).find(isMatch) ??
+    (await getAvailableSheetTitles(sheets, true)).find(isMatch) ??
+    null
+  );
+}
+
+/**
+ * Resolves the sheet tab for `dateStr`. Throws when that month has no tab, so transactions
+ * are never written into another month's tab.
  */
 export async function resolveSheetName(dateStr, sheets) {
-  const titles = await getAvailableSheetTitles(sheets);
-
-  if (!dateStr) {
-    return titles[0] || "September 2026";
+  const sheetName = await findSheetName(dateStr, sheets);
+  if (!sheetName) {
+    throw new Error(
+      `No sheet tab found for the month of ${dateStr}. ` +
+      `Duplicate last month's tab, rename it to that month (e.g. "October 2026"), then try again.`
+    );
   }
-
-  const parts = dateStr.split("-");
-  if (parts.length >= 3) {
-    const mCode = parts[1].toLowerCase();
-    const year = parts[2];
-
-    const monthAliases = {
-      jan: ["jan", "january", "januari"],
-      feb: ["feb", "february", "februari"],
-      mar: ["mar", "march", "maret"],
-      apr: ["apr", "april"],
-      may: ["may", "mei"],
-      jun: ["jun", "june", "juni"],
-      jul: ["jul", "july", "juli"],
-      aug: ["aug", "august", "agustus"],
-      sep: ["sep", "september"],
-      oct: ["oct", "october", "oktober"],
-      nov: ["nov", "november"],
-      dec: ["dec", "december", "desember"],
-    };
-
-    const aliases = monthAliases[mCode] || [mCode];
-
-    const match = titles.find((t) => {
-      const lower = t.toLowerCase();
-      const hasMonth = aliases.some((a) => lower.includes(a));
-      const hasYear = lower.includes(year);
-      return hasMonth && hasYear;
-    });
-
-    if (match) return match;
-
-    const monthMatch = titles.find((t) => {
-      const lower = t.toLowerCase();
-      return aliases.some((a) => lower.includes(a));
-    });
-
-    if (monthMatch) return monthMatch;
-  }
-
-  return titles[0] || "September 2026";
+  return sheetName;
 }
 
 /**
  * Adds extra income to cell K3 of the appropriate month
  */
-export async function addIncome(incomeData) {
+export function addIncome(incomeData) {
+  return withWriteLock(() => addIncomeUnlocked(incomeData));
+}
+
+async function addIncomeUnlocked(incomeData) {
   const sheets = await getSheetsClient();
   const sheetName = await resolveSheetName(incomeData.date, sheets);
 
@@ -193,7 +195,11 @@ export async function addIncome(incomeData) {
  * Writes directly into the next empty rows in Columns B:F to preserve the
  * side tables (Columns H to M) intact.
  */
-export async function appendExpenses(expenses) {
+export function appendExpenses(expenses) {
+  return withWriteLock(() => appendExpensesUnlocked(expenses));
+}
+
+async function appendExpensesUnlocked(expenses) {
   if (!Array.isArray(expenses) || expenses.length === 0) {
     throw new Error("No expenses provided to append");
   }
@@ -258,13 +264,43 @@ export async function appendExpense(expense) {
 }
 
 /**
- * Fetches the budget summary and breakdowns for a given month
+ * Checks whether any transaction in Column B is dated `dateStr` ("D-MMM-YYYY").
+ * USER_ENTERED dates are usually stored as serial numbers (days since 30-Dec-1899),
+ * so both serials and plain-text dates are matched. A month without a tab has no transactions.
+ */
+export async function hasTransactionsOnDate(dateStr) {
+  const sheets = await getSheetsClient();
+  const sheetName = await findSheetName(dateStr, sheets);
+  if (!sheetName) return false;
+
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `'${sheetName}'!B3:B996`,
+    valueRenderOption: "UNFORMATTED_VALUE",
+    dateTimeRenderOption: "SERIAL_NUMBER",
+  });
+
+  const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+  const [day, mon, year] = dateStr.split("-");
+  const serial =
+    (Date.UTC(Number(year), months.indexOf(mon.toLowerCase()), Number(day)) - Date.UTC(1899, 11, 30)) /
+    (24 * 60 * 60 * 1000);
+
+  return (res.data.values || []).some(([cell]) =>
+    typeof cell === "number"
+      ? Math.floor(cell) === serial
+      : String(cell ?? "").trim().toLowerCase() === dateStr.toLowerCase()
+  );
+}
+
+/**
+ * Fetches the budget summary and breakdowns for a given month (defaults to the current month)
  */
 export async function getMonthlySummary(sheetName = null) {
   const sheets = await getSheetsClient();
 
   if (!sheetName) {
-    sheetName = await resolveSheetName(null, sheets);
+    sheetName = await resolveSheetName(getTodayDateFormatted(), sheets);
   }
 
   try {

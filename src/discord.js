@@ -2,11 +2,13 @@
   Client,
   GatewayIntentBits,
   EmbedBuilder,
+  Events,
   Partials,
 } from "discord.js";
 import dotenv from "dotenv";
 import { parseExpenseFromImage, parseExpenseFromText } from "./gemini.js";
 import { appendExpenses, addIncome, getMonthlySummary } from "./sheets.js";
+import { scheduleDailyReminder } from "./reminder.js";
 
 dotenv.config();
 
@@ -58,7 +60,25 @@ function isChannelAllowed(channelId) {
   return targetChannelId === channelId;
 }
 
-client.once("ready", () => {
+/**
+ * Sends the daily reminder to DISCORD_CHANNEL_ID (mentioning authorized users),
+ * or as a DM to each authorized user when no channel is set
+ */
+async function sendReminder(text) {
+  if (targetChannelId) {
+    const channel = await client.channels.fetch(targetChannelId);
+    const mentions = authorizedUsers.map((id) => `<@${id}>`).join(" ");
+    await channel.send(mentions ? `${mentions} ${text}` : text);
+    return;
+  }
+
+  for (const userId of authorizedUsers) {
+    const user = await client.users.fetch(userId);
+    await user.send(text);
+  }
+}
+
+client.once(Events.ClientReady, () => {
   console.log("\n=======================================================");
   console.log(`🤖 Discord Expense Bot online as: ${client.user.tag}`);
   console.log(`📡 Ready to receive receipts and expense messages!`);
@@ -66,6 +86,12 @@ client.once("ready", () => {
     console.log(`🔒 Restricted to Channel ID: ${targetChannelId}`);
   }
   console.log("=======================================================\n");
+
+  if (targetChannelId || authorizedUsers.length > 0) {
+    scheduleDailyReminder(sendReminder);
+  } else {
+    console.warn("Daily reminder disabled: set DISCORD_CHANNEL_ID or DISCORD_AUTHORIZED_USERS so the bot knows where to send it.");
+  }
 });
 
 client.on("messageCreate", async (message) => {

@@ -39,6 +39,7 @@ Supports **Discord** (recommended) and **WhatsApp**.
 - **Reimbursement / Split-Bill** — When a friend pays you back, it reduces the category total:
   `"Hans bayar makan 50rb bca"` → recorded as -Rp 50.000
 - **Live Budget Summary** — Type `budget` or `laporan` to see remaining balance and breakdowns.
+- **Daily Reminder** — At 21:00, if nothing has been logged for today, the bot reminds you to record your expenses.
 - **Categories**: Food, Living, Transport, Family, Entertainment, Other
 - **Payment Sources**: BCA, Seabank, Grab, Superbank, Gopay, OVO
 
@@ -143,7 +144,9 @@ Copy the string between `/d/` and `/edit`. You will set this as `SPREADSHEET_ID`
 
 ### Adding New Months
 
-At the beginning of each new month, simply duplicate the current sheet tab in Google Sheets, rename it (e.g. `October 2026`), clear the transaction rows (`B3:F` downward), and adjust your starting income in `K3`. All formulas and breakdowns will automatically adapt.
+At the beginning of each new month, simply duplicate the current sheet tab in Google Sheets, rename it (e.g. `October 2026`), clear the transaction rows (`B3:F` downward), change the dates in the daily breakdown (`H3:H33`) to the new month, and adjust your starting income in `K3`. The other formulas will automatically adapt.
+
+The tab name must contain the month (English or Indonesian, full or abbreviated) and the year. If a transaction's month has no tab, the bot replies with an error instead of writing it into another month's tab, and `budget` always reports the current month's tab.
 
 ---
 
@@ -278,6 +281,17 @@ If you want the bot to only respond in one channel (e.g. `#expenses`):
    GOOGLE_CLIENT_SECRET=your_client_secret
    GOOGLE_REFRESH_TOKEN=your_refresh_token
    ```
+
+4. (Optional) Configure the daily reminder:
+   ```env
+   # Time to check for today's expenses (HH:MM), or "off" to disable. Default: 21:00
+   REMINDER_TIME=21:00
+
+   # Timezone used for dates and the reminder (the Docker image defaults to Asia/Jakarta)
+   TZ=Asia/Jakarta
+   ```
+
+   On Discord the reminder is posted in `DISCORD_CHANNEL_ID` (mentioning `DISCORD_AUTHORIZED_USERS`), or sent as a DM to the authorized users if no channel is set. At least one of the two must be set. On WhatsApp it goes to each number in `AUTHORIZED_NUMBERS`, or to your self-chat.
 
 ---
 
@@ -475,6 +489,7 @@ expense-tracker-bot/
 │   ├── start.js        # Unified launcher with platform selection
 │   ├── gemini.js       # Gemini Vision OCR + NLP text parser
 │   ├── sheets.js       # Google Sheets API client (read/write)
+│   ├── reminder.js     # Daily "no expenses logged yet" reminder
 │   ├── discord.js      # Discord bot (recommended)
 │   └── index.js        # WhatsApp bot (alternative)
 ├── template/
@@ -495,6 +510,7 @@ expense-tracker-bot/
 | `start.js`    | Entry point. Prompts for platform choice when both Discord and WhatsApp are configured. |
 | `gemini.js`   | Sends images/text to Gemini for structured extraction. Multi-model fallback (gemini-3.5-flash → gemini-3.6-flash → gemini-flash-latest). |
 | `sheets.js`   | Handles authentication (service account / OAuth), resolves sheet tab names dynamically, appends expenses, adds income, reads summaries. |
+| `reminder.js` | Checks the sheet at `REMINDER_TIME` each day and sends a reminder if no transaction is dated today. |
 | `discord.js`  | Discord.js bot with rich embed responses, image attachment OCR, channel and user restrictions. |
 | `index.js`    | WhatsApp bot via Baileys with QR login, message deduplication, and self-chat support. |
 

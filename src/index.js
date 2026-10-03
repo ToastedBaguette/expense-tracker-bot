@@ -10,6 +10,7 @@ import dotenv from "dotenv";
 import path from "path";
 import { parseExpenseFromImage, parseExpenseFromText } from "./gemini.js";
 import { appendExpenses, addIncome, getMonthlySummary } from "./sheets.js";
+import { scheduleDailyReminder } from "./reminder.js";
 
 dotenv.config();
 
@@ -27,6 +28,9 @@ const processedMessageIds = new Set();
 
 // Bot start timestamp (in seconds) to filter out stale history messages replayed on reconnect
 const botStartTime = Math.floor(Date.now() / 1000);
+
+// Latest socket (startBot creates a new one on every reconnect), used by the daily reminder
+let currentSock = null;
 
 /**
  * Checks if the sender is authorized
@@ -144,6 +148,7 @@ async function startBot() {
     logger: pino({ level: "silent" }),
     printQRInTerminal: false,
   });
+  currentSock = sock;
 
   sock.ev.on("creds.update", saveCreds);
 
@@ -336,4 +341,24 @@ async function startBot() {
   });
 }
 
+/**
+ * Sends the daily reminder to each authorized number, or to the self-chat if none are set
+ */
+async function sendReminder(text) {
+  if (!currentSock?.user) throw new Error("WhatsApp is not connected");
+
+  const myPhone = currentSock.user.id.split(":")[0].replace(/[^0-9]/g, "");
+  const numbers = AUTHORIZED_NUMBERS.length > 0 ? AUTHORIZED_NUMBERS : [myPhone];
+
+  for (const num of numbers) {
+    const sent = await currentSock.sendMessage(`${num}@s.whatsapp.net`, { text });
+    // Track the ID so the self-chat echo isn't parsed as an expense
+    if (sent?.key?.id) {
+      botSentMessageIds.add(sent.key.id);
+      setTimeout(() => botSentMessageIds.delete(sent.key.id), 5 * 60 * 1000);
+    }
+  }
+}
+
 startBot().catch((err) => console.error("Fatal Bot Error:", err));
+scheduleDailyReminder(sendReminder);
