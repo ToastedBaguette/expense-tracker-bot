@@ -140,6 +140,28 @@ function formatSummaryMessage(summary) {
   return msg.trim();
 }
 
+/**
+ * Formats the end-of-day summary of today's transactions
+ */
+function formatDailySummary({ date, transactions, total, monthly }) {
+  let msg = `*Ringkasan Pengeluaran Hari Ini — ${date}*\n`;
+  msg += `------------------------------------\n`;
+
+  for (const t of transactions) {
+    const tag = t.amount < 0 ? " • Reimbursement" : "";
+    msg += `• ${t.description}\n`;
+    msg += `  ${formatRupiah(t.amount)} (${t.category} • ${t.source}${tag})\n`;
+  }
+
+  msg += `------------------------------------\n`;
+  msg += `Total Hari Ini: *${formatRupiah(total)}* (${transactions.length} transaksi)`;
+  if (!monthly.error) {
+    msg += `\nTotal Pengeluaran (${monthly.month}): *${monthly.totalExpenses}*`;
+    msg += `\nSisa Budget: *${monthly.remainingBudget}*`;
+  }
+  return msg;
+}
+
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
@@ -361,4 +383,4 @@ async function sendReminder(text) {
 }
 
 startBot().catch((err) => console.error("Fatal Bot Error:", err));
-scheduleDailyReminder(sendReminder);
+scheduleDailyReminder(sendReminder, formatDailySummary);

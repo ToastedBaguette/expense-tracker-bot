@@ -1,6 +1,6 @@
 import dotenv from "dotenv";
 import { getTodayDateFormatted } from "./gemini.js";
-import { hasTransactionsOnDate } from "./sheets.js";
+import { getTransactionsOnDate, getMonthlySummary } from "./sheets.js";
 
 dotenv.config();
 
@@ -20,10 +20,11 @@ function getReminderTime() {
 }
 
 /**
- * Every day at REMINDER_TIME (local time, set TZ on servers), calls `send(text)`
- * if no transaction has been logged in the sheet for today.
+ * Every day at REMINDER_TIME (local time, set TZ on servers), sends a summary of today's
+ * transactions, or a reminder if none have been logged. `formatSummary({ date, transactions,
+ * total, monthly })` builds the platform-specific summary message, which is passed to `send`.
  */
-export function scheduleDailyReminder(send) {
+export function scheduleDailyReminder(send, formatSummary) {
   const time = getReminderTime();
   if (!time) return;
 
@@ -38,11 +39,19 @@ export function scheduleDailyReminder(send) {
     lastCheckedDate = todayStr;
 
     try {
-      if (await hasTransactionsOnDate(todayStr)) return;
-      await send(
-        `Pengingat: belum ada pengeluaran yang dicatat hari ini (${todayStr}). ` +
-        `Jangan lupa catat pengeluaranmu! Abaikan pesan ini kalau hari ini memang tidak ada pengeluaran.`
-      );
+      const transactions = await getTransactionsOnDate(todayStr);
+      if (transactions.length === 0) {
+        await send(
+          `Pengingat: belum ada pengeluaran yang dicatat hari ini (${todayStr}). ` +
+          `Jangan lupa catat pengeluaranmu! Abaikan pesan ini kalau hari ini memang tidak ada pengeluaran.`
+        );
+        return;
+      }
+
+      // Reimbursements are stored as negative amounts, so this is the net spend
+      const total = transactions.reduce((sum, t) => sum + t.amount, 0);
+      const monthly = await getMonthlySummary();
+      await send(formatSummary({ date: todayStr, transactions, total, monthly }));
     } catch (err) {
       console.error("Daily reminder error:", err);
     }
@@ -51,5 +60,5 @@ export function scheduleDailyReminder(send) {
   const hh = String(time.hour).padStart(2, "0");
   const mm = String(time.minute).padStart(2, "0");
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  console.log(`Daily reminder scheduled at ${hh}:${mm} (${tz}).`);
+  console.log(`Daily summary/reminder scheduled at ${hh}:${mm} (${tz}).`);
 }

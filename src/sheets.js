@@ -267,15 +267,16 @@ export async function appendExpense(expense) {
  * Checks whether any transaction in Column B is dated `dateStr` ("D-MMM-YYYY").
  * USER_ENTERED dates are usually stored as serial numbers (days since 30-Dec-1899),
  * so both serials and plain-text dates are matched. A month without a tab has no transactions.
+ * Returns the matching rows as { category, description, amount, source }.
  */
-export async function hasTransactionsOnDate(dateStr) {
+export async function getTransactionsOnDate(dateStr) {
   const sheets = await getSheetsClient();
   const sheetName = await findSheetName(dateStr, sheets);
-  if (!sheetName) return false;
+  if (!sheetName) return [];
 
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `'${sheetName}'!B3:B996`,
+    range: `'${sheetName}'!B3:F996`,
     valueRenderOption: "UNFORMATTED_VALUE",
     dateTimeRenderOption: "SERIAL_NUMBER",
   });
@@ -286,11 +287,18 @@ export async function hasTransactionsOnDate(dateStr) {
     (Date.UTC(Number(year), months.indexOf(mon.toLowerCase()), Number(day)) - Date.UTC(1899, 11, 30)) /
     (24 * 60 * 60 * 1000);
 
-  return (res.data.values || []).some(([cell]) =>
-    typeof cell === "number"
-      ? Math.floor(cell) === serial
-      : String(cell ?? "").trim().toLowerCase() === dateStr.toLowerCase()
-  );
+  return (res.data.values || [])
+    .filter(([cell]) =>
+      typeof cell === "number"
+        ? Math.floor(cell) === serial
+        : String(cell ?? "").trim().toLowerCase() === dateStr.toLowerCase()
+    )
+    .map(([, category, description, amount, source]) => ({
+      category: category || "Other",
+      description: description || "-",
+      amount: Number(amount) || 0,
+      source: source || "-",
+    }));
 }
 
 /**

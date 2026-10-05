@@ -61,20 +61,55 @@ function isChannelAllowed(channelId) {
 }
 
 /**
- * Sends the daily reminder to DISCORD_CHANNEL_ID (mentioning authorized users),
- * or as a DM to each authorized user when no channel is set
+ * Builds the end-of-day summary embed of today's transactions
  */
-async function sendReminder(text) {
+function buildDailySummaryMessage({ date, transactions, total, monthly }) {
+  const items = transactions
+    .map((t) => {
+      const tag = t.amount < 0 ? " *(Reimbursement)*" : "";
+      return `• ${t.description}\n  ${formatRupiah(t.amount)} (${t.category} • ${t.source}${tag})`;
+    })
+    .join("\n");
+
+  const embed = new EmbedBuilder()
+    .setColor(0x2ecc71)
+    .setTitle(`📅 Ringkasan Pengeluaran Hari Ini — ${date}`)
+    .setDescription(items)
+    .addFields({
+      name: "Total Hari Ini",
+      value: `**${formatRupiah(total)}** (${transactions.length} transaksi)`,
+      inline: true,
+    });
+
+  if (!monthly.error) {
+    embed.addFields(
+      { name: `Total Pengeluaran (${monthly.month})`, value: monthly.totalExpenses, inline: true },
+      { name: "Sisa Budget", value: monthly.remainingBudget, inline: true }
+    );
+  }
+
+  embed.setTimestamp();
+  return { embeds: [embed] };
+}
+
+/**
+ * Sends the daily summary/reminder (text or message options) to DISCORD_CHANNEL_ID
+ * (mentioning authorized users), or as a DM to each authorized user when no channel is set
+ */
+async function sendReminder(content) {
+  const message = typeof content === "string" ? { content } : content;
+
   if (targetChannelId) {
     const channel = await client.channels.fetch(targetChannelId);
     const mentions = authorizedUsers.map((id) => `<@${id}>`).join(" ");
-    await channel.send(mentions ? `${mentions} ${text}` : text);
+    const text = [mentions, message.content].filter(Boolean).join(" ");
+    await channel.send({ ...message, content: text || undefined });
     return;
   }
 
   for (const userId of authorizedUsers) {
     const user = await client.users.fetch(userId);
-    await user.send(text);
+    await user.send(message);
   }
 }
 
@@ -88,9 +123,9 @@ client.once(Events.ClientReady, () => {
   console.log("=======================================================\n");
 
   if (targetChannelId || authorizedUsers.length > 0) {
-    scheduleDailyReminder(sendReminder);
+    scheduleDailyReminder(sendReminder, buildDailySummaryMessage);
   } else {
-    console.warn("Daily reminder disabled: set DISCORD_CHANNEL_ID or DISCORD_AUTHORIZED_USERS so the bot knows where to send it.");
+    console.warn("Daily summary/reminder disabled: set DISCORD_CHANNEL_ID or DISCORD_AUTHORIZED_USERS so the bot knows where to send it.");
   }
 });
 
