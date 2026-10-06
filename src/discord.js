@@ -7,7 +7,7 @@
 } from "discord.js";
 import dotenv from "dotenv";
 import { parseExpenseFromImage, parseExpenseFromText } from "./gemini.js";
-import { appendExpenses, addIncome, getMonthlySummary } from "./sheets.js";
+import { appendExpenses, addIncome, getMonthlySummary, formatRupiah } from "./sheets.js";
 import { scheduleDailyReminder } from "./reminder.js";
 
 dotenv.config();
@@ -34,17 +34,6 @@ const client = new Client({
 });
 
 /**
- * Format currency number to IDR string
- */
-function formatRupiah(num) {
-  const n = Number(num) || 0;
-  if (n < 0) {
-    return "-Rp " + Math.abs(n).toLocaleString("id-ID");
-  }
-  return "Rp " + n.toLocaleString("id-ID");
-}
-
-/**
  * Checks if user is authorized to interact with the bot
  */
 function isUserAuthorized(userId) {
@@ -64,12 +53,19 @@ function isChannelAllowed(channelId) {
  * Builds the end-of-day summary embed of today's transactions
  */
 function buildDailySummaryMessage({ date, transactions, total, monthly }) {
-  const items = transactions
-    .map((t) => {
-      const tag = t.amount < 0 ? " *(Reimbursement)*" : "";
-      return `• ${t.description}\n  ${formatRupiah(t.amount)} (${t.category} • ${t.source}${tag})`;
-    })
-    .join("\n");
+  const lines = transactions.map((t) => {
+    const tag = t.amount < 0 ? " *(Reimbursement)*" : "";
+    return `• ${t.description}\n  ${formatRupiah(t.amount)} (${t.category} • ${t.source}${tag})`;
+  });
+
+  // Embed descriptions are capped at 4096 characters: drop transactions from the end until the
+  // list fits, and say how many were left out
+  let shown = lines.length;
+  let items = lines.join("\n");
+  while (items.length > 4096) {
+    shown--;
+    items = [...lines.slice(0, shown), `… dan ${lines.length - shown} transaksi lainnya`].join("\n");
+  }
 
   const embed = new EmbedBuilder()
     .setColor(0x2ecc71)
@@ -161,7 +157,7 @@ client.on("messageCreate", async (message) => {
         );
 
       const activeCategories = (summary.categories || [])
-        .filter((c) => c.name && c.total && c.total !== "Rp0")
+        .filter((c) => c.name && c.total !== formatRupiah(0))
         .map((c) => `• **${c.name}**: ${c.total}`)
         .join("\n");
 
@@ -170,7 +166,7 @@ client.on("messageCreate", async (message) => {
       }
 
       const activeSources = (summary.sources || [])
-        .filter((s) => s.name && s.total && s.total !== "Rp0")
+        .filter((s) => s.name && s.total !== formatRupiah(0))
         .map((s) => `• **${s.name}**: ${s.total}`)
         .join("\n");
 

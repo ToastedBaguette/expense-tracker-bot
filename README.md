@@ -39,7 +39,7 @@ Supports **Discord** (recommended) and **WhatsApp**.
 - **Reimbursement / Split-Bill** — When a friend pays you back, it reduces the category total:
   `"Hans bayar makan 50rb bca"` → recorded as -Rp 50.000
 - **Live Budget Summary** — Type `budget` or `laporan` to see remaining balance and breakdowns.
-- **Daily Summary** — At 21:00 the bot sends a summary of today's spending (each transaction, the day's total, and the month's total and remaining budget). If nothing has been logged today, it reminds you to record your expenses instead.
+- **Daily Summary** — At 21:00 the bot sends a summary of today's spending (each transaction, the day's total, and the month's total and remaining budget). If nothing has been logged today, it reminds you to record your expenses instead, and if the current month has no sheet tab yet, it tells you to create one. If sending fails (or the bot is restarting at 21:00), it retries every 2 minutes until 21:30.
 - **Categories**: Food, Living, Transport, Family, Entertainment, Other
 - **Payment Sources**: BCA, Seabank, Grab, Superbank, Gopay, OVO
 
@@ -510,7 +510,7 @@ expense-tracker-bot/
 | `start.js`    | Entry point. Prompts for platform choice when both Discord and WhatsApp are configured. |
 | `gemini.js`   | Sends images/text to Gemini for structured extraction. Multi-model fallback (gemini-3.5-flash → gemini-3.6-flash → gemini-flash-latest). |
 | `sheets.js`   | Handles authentication (service account / OAuth), resolves sheet tab names dynamically, appends expenses, adds income, reads summaries. |
-| `reminder.js` | Reads today's transactions at `REMINDER_TIME` each day and sends a spending summary, or a reminder if no transaction is dated today. |
+| `reminder.js` | Reads today's transactions at `REMINDER_TIME` each day and sends a spending summary, or a reminder if no transaction is dated today (or the month has no tab). Retries failed sends for 30 minutes. |
 | `discord.js`  | Discord.js bot with rich embed responses, image attachment OCR, channel and user restrictions. |
 | `index.js`    | WhatsApp bot via Baileys with QR login, message deduplication, and self-chat support. |
 

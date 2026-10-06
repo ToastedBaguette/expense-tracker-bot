@@ -22,6 +22,17 @@ function withWriteLock(task) {
 }
 
 /**
+ * Format currency number to IDR string in whole rupiah, e.g. "Rp 50.000" or "-Rp 50.000"
+ */
+export function formatRupiah(num) {
+  const n = Math.round(Number(num) || 0);
+  if (n < 0) {
+    return "-Rp " + Math.abs(n).toLocaleString("id-ID");
+  }
+  return "Rp " + n.toLocaleString("id-ID");
+}
+
+/**
  * Initializes Google Sheets API client
  */
 export async function getSheetsClient() {
@@ -266,13 +277,14 @@ export async function appendExpense(expense) {
 /**
  * Checks whether any transaction in Column B is dated `dateStr` ("D-MMM-YYYY").
  * USER_ENTERED dates are usually stored as serial numbers (days since 30-Dec-1899),
- * so both serials and plain-text dates are matched. A month without a tab has no transactions.
- * Returns the matching rows as { category, description, amount, source }.
+ * so both serials and plain-text dates are matched.
+ * Returns the matching rows as { category, description, amount, source }, or null when the
+ * month has no sheet tab (so nothing could have been logged).
  */
 export async function getTransactionsOnDate(dateStr) {
   const sheets = await getSheetsClient();
   const sheetName = await findSheetName(dateStr, sheets);
-  if (!sheetName) return [];
+  if (!sheetName) return null;
 
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -319,21 +331,25 @@ export async function getMonthlySummary(sheetName = null) {
         `'${sheetName}'!K6:L11`,  // 6 Categories: Food, Living, Transport, Family, Entertainment, Other
         `'${sheetName}'!K14:L18`, // 5 Sources: Gopay, BCA, Seabank, Grab, Superbank
       ],
-      valueRenderOption: "FORMATTED_VALUE",
+      valueRenderOption: "UNFORMATTED_VALUE",
     });
 
+    // Amounts are formatted here rather than with the sheet's number format, so they match the
+    // amounts the bot formats itself. Non-numeric cells (e.g. "#REF!") are passed through.
+    const money = (v) => (typeof v === "number" ? formatRupiah(v) : v || formatRupiah(0));
+
     const valueRanges = res.data.valueRanges || [];
-    const overview = valueRanges[0]?.values?.[0] || ["Rp0", "Rp0", "Rp0"];
+    const overview = valueRanges[0]?.values?.[0] || [];
     const categories = valueRanges[1]?.values || [];
     const sources = valueRanges[2]?.values || [];
 
     return {
       month: sheetName,
-      income: overview[0] || "Rp0",
-      totalExpenses: overview[1] || "Rp0",
-      remainingBudget: overview[2] || "Rp0",
-      categories: categories.map(([name, total]) => ({ name, total })),
-      sources: sources.map(([name, total]) => ({ name, total })),
+      income: money(overview[0]),
+      totalExpenses: money(overview[1]),
+      remainingBudget: money(overview[2]),
+      categories: categories.map(([name, total]) => ({ name, total: money(total) })),
+      sources: sources.map(([name, total]) => ({ name, total: money(total) })),
     };
   } catch (error) {
     console.error(`Error reading summary for ${sheetName}:`, error.message);

@@ -9,7 +9,7 @@ import qrcode from "qrcode-terminal";
 import dotenv from "dotenv";
 import path from "path";
 import { parseExpenseFromImage, parseExpenseFromText } from "./gemini.js";
-import { appendExpenses, addIncome, getMonthlySummary } from "./sheets.js";
+import { appendExpenses, addIncome, getMonthlySummary, formatRupiah } from "./sheets.js";
 import { scheduleDailyReminder } from "./reminder.js";
 
 dotenv.config();
@@ -39,17 +39,6 @@ function isAuthorized(senderJid) {
   if (AUTHORIZED_NUMBERS.length === 0) return true; // allow all if not set
   const senderNumber = senderJid.replace(/[^0-9]/g, "");
   return AUTHORIZED_NUMBERS.some((num) => senderNumber.includes(num));
-}
-
-/**
- * Format currency number to IDR string
- */
-function formatRupiah(num) {
-  const n = Number(num) || 0;
-  if (n < 0) {
-    return "-Rp " + Math.abs(n).toLocaleString("id-ID");
-  }
-  return "Rp " + n.toLocaleString("id-ID");
 }
 
 /**
@@ -117,7 +106,7 @@ function formatSummaryMessage(summary) {
   msg += `Sisa Budget: *${summary.remainingBudget}*\n\n`;
 
   const activeCategories = (summary.categories || []).filter(
-    (c) => c.name && c.total && c.total !== "Rp0"
+    (c) => c.name && c.total !== formatRupiah(0)
   );
   if (activeCategories.length > 0) {
     msg += `*Kategori:*\n`;
@@ -128,7 +117,7 @@ function formatSummaryMessage(summary) {
   }
 
   const activeSources = (summary.sources || []).filter(
-    (s) => s.name && s.total && s.total !== "Rp0"
+    (s) => s.name && s.total !== formatRupiah(0)
   );
   if (activeSources.length > 0) {
     msg += `*Sumber Dana:*\n`;
