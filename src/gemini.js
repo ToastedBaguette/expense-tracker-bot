@@ -88,54 +88,98 @@ export function getTodayDateFormatted() {
   return `${d}-${m}-${y}`;
 }
 
+// Pauses before going through the model list again while Gemini is busy (503 high demand / 429).
+// Busy spikes are usually short: 4 attempts in all, about a minute of waiting
+const BUSY_RETRY_DELAYS_MS = [10_000, 20_000, 30_000];
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 /**
- * Helper to execute Gemini requests with automatic fallback across models
+ * Thrown when Gemini was still busy after every retry
  */
-async function generateWithFallback(contents, schema = FINANCIAL_ACTION_SCHEMA) {
-  let lastError = null;
-
-  for (const model of CANDIDATE_MODELS) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: schema,
-        },
-      });
-
-      const text = response.text?.trim();
-      if (!text) throw new Error("Empty response received from Gemini");
-
-      return JSON.parse(text);
-    } catch (err) {
-      lastError = err;
-      const errMsg = err.message || "";
-      const isTransient =
-        errMsg.includes("503") ||
-        errMsg.includes("429") ||
-        errMsg.includes("UNAVAILABLE") ||
-        errMsg.includes("high demand") ||
-        errMsg.includes("RESOURCE_EXHAUSTED");
-
-      if (isTransient) {
-        console.warn(`Model ${model} unavailable/busy. Trying fallback...`);
-        await new Promise((r) => setTimeout(r, 800));
-        continue;
-      }
-
-      console.warn(`Model ${model} failed (${err.message}). Trying fallback...`);
-    }
+export class GeminiBusyError extends Error {
+  constructor(cause) {
+    super(`Gemini is busy: ${cause.message}`, { cause });
+    this.name = "GeminiBusyError";
   }
+}
 
-  throw lastError;
+function isBusyError(err) {
+  const errMsg = err.message || "";
+  return (
+    err.status === 503 ||
+    err.status === 429 ||
+    errMsg.includes("503") ||
+    errMsg.includes("429") ||
+    errMsg.includes("UNAVAILABLE") ||
+    errMsg.includes("high demand") ||
+    errMsg.includes("RESOURCE_EXHAUSTED")
+  );
 }
 
 /**
- * Analyzes an image (screenshot of receipt, transfer in/out, or mutation history)
+ * Helper to execute Gemini requests with automatic fallback across models. If a model was busy,
+ * the whole list is tried again after a pause; onRetry({ attempt, maxAttempts, delayMs }) is
+ * called before each pause so the caller can tell the user.
  */
-export async function parseExpenseFromImage(imageBuffer, mimeType = "image/jpeg", userCaption = "") {
+async function generateWithFallback(contents, { schema = FINANCIAL_ACTION_SCHEMA, onRetry } = {}) {
+  const maxAttempts = BUSY_RETRY_DELAYS_MS.length + 1;
+
+  for (let attempt = 1; ; attempt++) {
+    let lastError = null;
+    let busyError = null;
+
+    for (const model of CANDIDATE_MODELS) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: schema,
+          },
+        });
+
+        const text = response.text?.trim();
+        if (!text) throw new Error("Empty response received from Gemini");
+
+        return JSON.parse(text);
+      } catch (err) {
+        lastError = err;
+
+        if (isBusyError(err)) {
+          busyError = err;
+          console.warn(`Model ${model} unavailable/busy. Trying fallback...`);
+          await sleep(800);
+          continue;
+        }
+
+        console.warn(`Model ${model} failed (${err.message}). Trying fallback...`);
+      }
+    }
+
+    // Other errors (bad API key, unknown model) won't go away by waiting
+    if (!busyError) throw lastError;
+    if (attempt === maxAttempts) throw new GeminiBusyError(busyError);
+
+    const delayMs = BUSY_RETRY_DELAYS_MS[attempt - 1];
+    console.warn(`Gemini busy. Retrying in ${delayMs / 1000}s (attempt ${attempt + 1}/${maxAttempts})...`);
+    if (onRetry) {
+      try {
+        await onRetry({ attempt: attempt + 1, maxAttempts, delayMs });
+      } catch (err) {
+        console.warn(`Could not report the Gemini retry: ${err.message}`);
+      }
+    }
+    await sleep(delayMs);
+  }
+}
+
+/**
+ * Analyzes an image (screenshot of receipt, transfer in/out, or mutation history).
+ * onRetry is called each time Gemini is busy and the request will be retried.
+ */
+export async function parseExpenseFromImage(imageBuffer, mimeType = "image/jpeg", userCaption = "", onRetry) {
   try {
     const todayStr = getTodayDateFormatted();
     const prompt = `You are a personal finance assistant.
@@ -174,7 +218,7 @@ ${userCaption ? `User note/caption: "${userCaption}"` : ""}`;
       },
     ];
 
-    const result = await generateWithFallback(contents);
+    const result = await generateWithFallback(contents, { onRetry });
 
     if (result.type === "EXPENSE" && Array.isArray(result.expenses)) {
       result.expenses = result.expenses.map((item) => ({
@@ -193,9 +237,10 @@ ${userCaption ? `User note/caption: "${userCaption}"` : ""}`;
 }
 
 /**
- * Parses natural language text for expenses, reimbursements, or income
+ * Parses natural language text for expenses, reimbursements, or income.
+ * onRetry is called each time Gemini is busy and the request will be retried.
  */
-export async function parseExpenseFromText(text) {
+export async function parseExpenseFromText(text, onRetry) {
   try {
     const todayStr = getTodayDateFormatted();
     const prompt = `You are a personal finance assistant for Indonesian expense tracking.
@@ -234,7 +279,7 @@ RULES:
    - If just chatting or greeting, set type: "NONE".`;
 
     const contents = [{ role: "user", parts: [{ text: prompt }] }];
-    const result = await generateWithFallback(contents);
+    const result = await generateWithFallback(contents, { onRetry });
 
     if (result.type === "EXPENSE" && Array.isArray(result.expenses)) {
       result.expenses = result.expenses.map((item) => ({

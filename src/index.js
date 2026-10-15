@@ -8,7 +8,7 @@ import pino from "pino";
 import qrcode from "qrcode-terminal";
 import dotenv from "dotenv";
 import path from "path";
-import { parseExpenseFromImage, parseExpenseFromText } from "./gemini.js";
+import { parseExpenseFromImage, parseExpenseFromText, GeminiBusyError } from "./gemini.js";
 import { appendExpenses, addIncome, getMonthlySummary, formatRupiah } from "./sheets.js";
 import { scheduleDailyReminder } from "./reminder.js";
 
@@ -31,6 +31,11 @@ const botStartTime = Math.floor(Date.now() / 1000);
 
 // Latest socket (startBot creates a new one on every reconnect), used by the daily reminder
 let currentSock = null;
+
+const GEMINI_RETRY_TEXT = "Gemini sedang sibuk, bot mencoba lagi otomatis. Mohon tunggu sebentar...";
+const GEMINI_BUSY_TEXT =
+  "Gemini masih sibuk setelah beberapa kali dicoba, jadi transaksi ini *belum dicatat*. " +
+  "Silakan kirim ulang beberapa menit lagi.";
 
 /**
  * Checks if the sender is authorized
@@ -252,6 +257,10 @@ async function startBot() {
       const messageType = Object.keys(msg.message)[0];
       const isImage = messageType === "imageMessage";
 
+      // Sent messages aren't edited here, so tell the sender only once that Gemini is being retried
+      const onGeminiRetry = ({ attempt }) =>
+        attempt === 2 ? reply(senderJid, { text: GEMINI_RETRY_TEXT }) : undefined;
+
       const textBody =
         msg.message.conversation ||
         msg.message.extendedTextMessage?.text ||
@@ -269,7 +278,7 @@ async function startBot() {
           const mimeType = msg.message.imageMessage?.mimetype || "image/jpeg";
           const caption = msg.message.imageMessage?.caption || "";
 
-          const parsed = await parseExpenseFromImage(buffer, mimeType, caption);
+          const parsed = await parseExpenseFromImage(buffer, mimeType, caption, onGeminiRetry);
 
           if (parsed.type === "INCOME" && parsed.income) {
             const res = await addIncome(parsed.income);
@@ -287,7 +296,9 @@ async function startBot() {
         } catch (err) {
           console.error("Gagal memproses screenshot:", err);
           await reply(senderJid, {
-            text: `Terjadi kesalahan saat membaca bukti transaksi: ${err.message}`,
+            text: err instanceof GeminiBusyError
+              ? GEMINI_BUSY_TEXT
+              : `Terjadi kesalahan saat membaca bukti transaksi: ${err.message}`,
           });
         }
         continue;
@@ -316,7 +327,7 @@ async function startBot() {
       // 3. Process Natural Language Entry (Expense, Reimbursement, or Income)
       if (textBody.trim().length > 0) {
         try {
-          const parsed = await parseExpenseFromText(textBody);
+          const parsed = await parseExpenseFromText(textBody, onGeminiRetry);
 
           if (parsed.type === "INCOME" && parsed.income) {
             const res = await addIncome(parsed.income);
@@ -344,7 +355,7 @@ async function startBot() {
         } catch (err) {
           console.error("Gagal memproses pesan teks:", err);
           await reply(senderJid, {
-            text: `Terjadi kesalahan: ${err.message}`,
+            text: err instanceof GeminiBusyError ? GEMINI_BUSY_TEXT : `Terjadi kesalahan: ${err.message}`,
           });
         }
       }

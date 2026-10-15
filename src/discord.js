@@ -6,7 +6,7 @@
   Partials,
 } from "discord.js";
 import dotenv from "dotenv";
-import { parseExpenseFromImage, parseExpenseFromText } from "./gemini.js";
+import { parseExpenseFromImage, parseExpenseFromText, GeminiBusyError } from "./gemini.js";
 import { appendExpenses, addIncome, getMonthlySummary, formatRupiah } from "./sheets.js";
 import { scheduleDailyReminder } from "./reminder.js";
 
@@ -47,6 +47,17 @@ function isUserAuthorized(userId) {
 function isChannelAllowed(channelId) {
   if (!targetChannelId) return true;
   return targetChannelId === channelId;
+}
+
+const GEMINI_BUSY_TEXT =
+  "⚠️ Gemini masih sibuk setelah beberapa kali dicoba, jadi transaksi ini **belum dicatat**. " +
+  "Silakan kirim ulang beberapa menit lagi.";
+
+/**
+ * Status text while Gemini is busy and the bot waits to try again
+ */
+function geminiRetryText({ attempt, maxAttempts, delayMs }) {
+  return `⏳ *Gemini sedang sibuk. Mencoba lagi dalam ${delayMs / 1000} detik... (percobaan ${attempt}/${maxAttempts})*`;
 }
 
 /**
@@ -197,7 +208,9 @@ client.on("messageCreate", async (message) => {
       const buffer = Buffer.from(arrayBuffer);
       const mimeType = imageAttachment.contentType || "image/jpeg";
 
-      const parsed = await parseExpenseFromImage(buffer, mimeType, text);
+      const parsed = await parseExpenseFromImage(buffer, mimeType, text, (retry) =>
+        statusMsg.edit(geminiRetryText(retry))
+      );
 
       if (parsed.type === "INCOME" && parsed.income) {
         const res = await addIncome(parsed.income);
@@ -250,15 +263,27 @@ client.on("messageCreate", async (message) => {
       }
     } catch (err) {
       console.error("Discord image processing error:", err);
-      await statusMsg.edit(`❌ Terjadi kesalahan saat membaca gambar: ${err.message}`);
+      await statusMsg.edit(
+        err instanceof GeminiBusyError ? GEMINI_BUSY_TEXT : `❌ Terjadi kesalahan saat membaca gambar: ${err.message}`
+      );
     }
     return;
   }
 
   // 3. Process Natural Language Text Entry
   if (text.length > 0) {
+    // Only posted while Gemini is busy; the final answer then replaces it
+    let statusMsg = null;
+    const respond = (reply) => {
+      if (!statusMsg) return message.reply(reply);
+      return statusMsg.edit(typeof reply === "string" ? reply : { content: null, ...reply });
+    };
+
     try {
-      const parsed = await parseExpenseFromText(text);
+      const parsed = await parseExpenseFromText(text, async (retry) => {
+        if (statusMsg) await statusMsg.edit(geminiRetryText(retry));
+        else statusMsg = await message.reply(geminiRetryText(retry));
+      });
 
       if (parsed.type === "INCOME" && parsed.income) {
         const res = await addIncome(parsed.income);
@@ -275,7 +300,7 @@ client.on("messageCreate", async (message) => {
           )
           .setTimestamp();
 
-        await message.reply({ embeds: [embed] });
+        await respond({ embeds: [embed] });
       } else if (parsed.type === "EXPENSE" && parsed.expenses && parsed.expenses.length > 0) {
         const res = await appendExpenses(parsed.expenses);
 
@@ -305,7 +330,7 @@ client.on("messageCreate", async (message) => {
         );
 
         embed.setTimestamp();
-        await message.reply({ embeds: [embed] });
+        await respond({ embeds: [embed] });
       } else {
         // Helpful guide if text wasn't recognized as financial transaction
         const embed = new EmbedBuilder()
@@ -320,11 +345,11 @@ client.on("messageCreate", async (message) => {
             "• **Cek Status Budget:** Ketik `budget` atau `laporan`\n" +
             "• **Screenshot:** Cukup upload foto/screenshot bukti transaksi!"
           );
-        await message.reply({ embeds: [embed] });
+        await respond({ embeds: [embed] });
       }
     } catch (err) {
       console.error("Discord text error:", err);
-      await message.reply(`❌ Terjadi kesalahan: ${err.message}`);
+      await respond(err instanceof GeminiBusyError ? GEMINI_BUSY_TEXT : `❌ Terjadi kesalahan: ${err.message}`);
     }
   }
 });

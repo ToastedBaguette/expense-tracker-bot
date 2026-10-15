@@ -508,7 +508,7 @@ expense-tracker-bot/
 | File          | Description                                                                 |
 |---------------|-----------------------------------------------------------------------------|
 | `start.js`    | Entry point. Prompts for platform choice when both Discord and WhatsApp are configured. |
-| `gemini.js`   | Sends images/text to Gemini for structured extraction. Multi-model fallback (gemini-3.5-flash → gemini-3.6-flash → gemini-flash-latest). |
+| `gemini.js`   | Sends images/text to Gemini for structured extraction. Multi-model fallback (gemini-3.5-flash → gemini-3.6-flash → gemini-flash-latest), retried after 10s/20s/30s while Gemini is busy. |
 | `sheets.js`   | Handles authentication (service account / OAuth), resolves sheet tab names dynamically, appends expenses, adds income, reads summaries. |
 | `reminder.js` | Reads today's transactions at `REMINDER_TIME` each day and sends a spending summary, or a reminder if no transaction is dated today (or the month has no tab). Retries failed sends for 30 minutes. |
 | `discord.js`  | Discord.js bot with rich embed responses, image attachment OCR, channel and user restrictions. |
@@ -532,7 +532,7 @@ expense-tracker-bot/
 - Check that `SPREADSHEET_ID` in `.env` matches your spreadsheet.
 
 **Gemini API errors (503 / RESOURCE_EXHAUSTED)**
-- The bot has automatic fallback across multiple Gemini models. If all models are busy, wait a moment and try again.
+- The bot has automatic fallback across multiple Gemini models. If they are busy (503 "high demand" or 429), it waits and tries them all again — up to 4 attempts over about a minute — and shows the countdown in Discord ("Gemini sedang sibuk. Mencoba lagi dalam 10 detik... (percobaan 2/4)"). If Gemini is still busy after that, the bot says the transaction was **not** recorded; send it again a few minutes later.
 - Check your Gemini API quota at [Google AI Studio](https://aistudio.google.com/).
 
 **WhatsApp "MessageCounterError: Key used already"**
