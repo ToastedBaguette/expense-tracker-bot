@@ -92,6 +92,10 @@ export function getTodayDateFormatted() {
 // Busy spikes are usually short: 4 attempts in all, about a minute of waiting
 const BUSY_RETRY_DELAYS_MS = [10_000, 20_000, 30_000];
 
+// Longest wait for one Gemini call. A busy model can take minutes to answer, so give up on it
+// and move to the next one instead of leaving the user without a reply
+const REQUEST_TIMEOUT_MS = 30_000;
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -104,9 +108,24 @@ export class GeminiBusyError extends Error {
   }
 }
 
+/**
+ * True when the call ran past REQUEST_TIMEOUT_MS: aborted on our side, or Gemini gave up on the
+ * deadline the SDK sends along with it
+ */
+function isTimeoutError(err) {
+  const errMsg = err.message || "";
+  return (
+    err.name === "AbortError" ||
+    err.name === "TimeoutError" ||
+    err.status === 504 ||
+    errMsg.includes("DEADLINE_EXCEEDED")
+  );
+}
+
 function isBusyError(err) {
   const errMsg = err.message || "";
   return (
+    isTimeoutError(err) ||
     err.status === 503 ||
     err.status === 429 ||
     errMsg.includes("503") ||
@@ -137,6 +156,7 @@ async function generateWithFallback(contents, { schema = FINANCIAL_ACTION_SCHEMA
           config: {
             responseMimeType: "application/json",
             responseSchema: schema,
+            httpOptions: { timeout: REQUEST_TIMEOUT_MS },
           },
         });
 
@@ -149,7 +169,8 @@ async function generateWithFallback(contents, { schema = FINANCIAL_ACTION_SCHEMA
 
         if (isBusyError(err)) {
           busyError = err;
-          console.warn(`Model ${model} unavailable/busy. Trying fallback...`);
+          const reason = isTimeoutError(err) ? `no answer after ${REQUEST_TIMEOUT_MS / 1000}s` : "unavailable/busy";
+          console.warn(`Model ${model} ${reason}. Trying fallback...`);
           await sleep(800);
           continue;
         }

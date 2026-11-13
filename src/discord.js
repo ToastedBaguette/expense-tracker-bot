@@ -272,18 +272,13 @@ client.on("messageCreate", async (message) => {
 
   // 3. Process Natural Language Text Entry
   if (text.length > 0) {
-    // Only posted while Gemini is busy; the final answer then replaces it
-    let statusMsg = null;
-    const respond = (reply) => {
-      if (!statusMsg) return message.reply(reply);
-      return statusMsg.edit(typeof reply === "string" ? reply : { content: null, ...reply });
-    };
+    // Posted straight away so the user knows the bot is working; the final answer replaces it
+    const statusMsg = await message.reply("⏳ *Mencatat transaksi dengan Gemini...*");
+    const respond = (reply) =>
+      statusMsg.edit(typeof reply === "string" ? reply : { content: null, ...reply });
 
     try {
-      const parsed = await parseExpenseFromText(text, async (retry) => {
-        if (statusMsg) await statusMsg.edit(geminiRetryText(retry));
-        else statusMsg = await message.reply(geminiRetryText(retry));
-      });
+      const parsed = await parseExpenseFromText(text, (retry) => statusMsg.edit(geminiRetryText(retry)));
 
       if (parsed.type === "INCOME" && parsed.income) {
         const res = await addIncome(parsed.income);
