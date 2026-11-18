@@ -15,6 +15,9 @@ const CANDIDATE_MODELS = [
   process.env.GEMINI_MODEL || "gemini-3.5-flash",
   "gemini-3.6-flash",
   "gemini-flash-latest",
+  // Lite tier on purpose: the flash models above can all be overloaded at once (18 Nov 2026) while
+  // lite kept answering. Not gemini-2.5-flash: listed by the API but 404s for this key
+  "gemini-flash-lite-latest",
 ];
 
 const EXPENSE_ITEM_SCHEMA = {
