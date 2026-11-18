@@ -150,15 +150,36 @@ async function generateWithFallback(contents, { schema = FINANCIAL_ACTION_SCHEMA
 
     for (const model of CANDIDATE_MODELS) {
       try {
-        const response = await ai.models.generateContent({
-          model,
-          contents,
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: schema,
-            httpOptions: { timeout: REQUEST_TIMEOUT_MS },
-          },
+        // httpOptions.timeout only helps when Gemini answers with its own deadline error; a
+        // connection that stalls silently would hang forever. So also abort on our side, and
+        // race a timer in case the abort is not honoured.
+        const abortSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+        let hardTimer;
+        const hardDeadline = new Promise((_, reject) => {
+          hardTimer = setTimeout(() => {
+            const e = new Error(`No response within ${REQUEST_TIMEOUT_MS / 1000}s`);
+            e.name = "TimeoutError";
+            reject(e);
+          }, REQUEST_TIMEOUT_MS + 5_000);
         });
+        let response;
+        try {
+          response = await Promise.race([
+            ai.models.generateContent({
+              model,
+              contents,
+              config: {
+                responseMimeType: "application/json",
+                responseSchema: schema,
+                httpOptions: { timeout: REQUEST_TIMEOUT_MS },
+                abortSignal,
+              },
+            }),
+            hardDeadline,
+          ]);
+        } finally {
+          clearTimeout(hardTimer);
+        }
 
         const text = response.text?.trim();
         if (!text) throw new Error("Empty response received from Gemini");
